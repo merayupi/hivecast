@@ -417,17 +417,23 @@ RUSTFLAGS='-C link-arg=-s' cargo build --target wasm32-unknown-unknown --release
 # artifact: target/wasm32-unknown-unknown/release/hivecast.wasm
 ```
 
-Unit/integration tests (Linux; uses the `unit-testing` mock VM):
+Unit tests (Linux; uses the `unit-testing` mock VM):
 
 ```sh
-cargo test --manifest-path contracts/hivecast/Cargo.toml
+cargo test --manifest-path contracts/hivecast/Cargo.toml --lib
 ```
 
-Sandbox runtime smoke (Linux, `near-workspaces` or `near-sandbox`):
+Real near-sandbox lifecycle tests (Linux; compiles the real WASM and deploys
+it to a local `near-sandbox` node via `near-workspaces`, exercising the full
+public lifecycle and measuring 64-participant settlement gas):
 
 ```sh
-cargo test --manifest-path contracts/hivecast/Cargo.toml -- --ignored
+cargo test --manifest-path contracts/hivecast/Cargo.toml --test sandbox -- --nocapture
 ```
+
+A single entrypoint (`scripts/ci-linux.sh`) and the GitHub Actions workflow
+(`.github/workflows/hivecast-contract.yml`, `workflow_dispatch`) run all three
+stages: WASM build, unit tests, and the sandbox lifecycle tests.
 
 > **Windows note.** The WASM build works on Windows. The host test/sandbox
 > build does not: `near-sdk`'s `unit-testing` feature pulls `near-vm-runner`,

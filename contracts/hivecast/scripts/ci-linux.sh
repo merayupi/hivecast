@@ -25,7 +25,10 @@ WASM="$CONTRACT_DIR/target/wasm32-unknown-unknown/release/hivecast.wasm"
 test -f "$WASM" || { echo "missing $WASM" >&2; exit 1; }
 echo "WASM artifact: $WASM ($(wc -c < "$WASM") bytes)"
 
-echo "==> Running public-interface test suite (near-sdk mock VM)"
-cargo test --manifest-path "$CONTRACT_DIR/Cargo.toml"
+echo "==> Running public-interface unit tests (near-sdk mock VM)"
+cargo test --manifest-path "$CONTRACT_DIR/Cargo.toml" --lib
+
+echo "==> Running real near-sandbox lifecycle tests (near-workspaces)"
+cargo test --manifest-path "$CONTRACT_DIR/Cargo.toml" --test sandbox -- --nocapture
 
 echo "==> OK"
