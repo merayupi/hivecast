@@ -202,8 +202,7 @@ npm run sandbox:access --workspace @hivecast/runner                   # Linux: r
   (`openTime == target`, `closeTime == openTime + 1h − 1ms`, the INCLUSIVE
   Binance interval end) and completed status before deriving `close > open`
   (ties/lower = NO) with exact decimal strings.
-- **Weather** — Open-Meteo `ecmwf_ifs` (ECMWF IFS 9 km; `ecmwf_ifs04` is a
-  0.04° cut and returns `null` — it is NOT used), Kudus
+- **Weather** — Open-Meteo `ecmwf_ifs` (ECMWF IFS 9 km) at Kudus
   (`-6.8049,110.8397`), `Asia/Jakarta`; forecast `precipitation_sum` fetched
   before the cutoff (per-run publication time not documented → availability
   `inference`, disclosed); resolution from `archive-api.open-meteo.com/v1/archive`;

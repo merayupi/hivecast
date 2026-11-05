@@ -15,7 +15,7 @@
 
 import { AGENT_IDS, STRATEGY_DOMAINS } from '@hivecast/core';
 import type { AgentId } from '@hivecast/core';
-import type { ChainClient } from './chain/types.js';
+import type { ChainClient, TxFinalStatusView } from './chain/types.js';
 import type { RunnerConfig } from './config.js';
 import type { Runner, TickReport } from './runner.js';
 import type { Store } from './store.js';
@@ -30,6 +30,7 @@ import {
   computeSimulationReport,
   computeAccountEconomics,
 } from './public-data.js';
+import { PublicChainCache } from './public-cache.js';
 import type { GlobalLeaderboard, QuestionComparison, EconomicsReport } from './public-data.js';
 import type { ReplayReport } from '@hivecast/simulation';
 
@@ -122,6 +123,8 @@ export class Runtime {
   readonly store: Store;
   readonly runner: Runner;
   readonly access: AccessAuth;
+  /** Bounded public read cache (terminal materialization + balance throttle). */
+  private publicReads: PublicChainCache;
 
   constructor(
     config: RunnerConfig,
@@ -135,6 +138,7 @@ export class Runtime {
     this.store = store;
     this.runner = runner;
     this.access = new AccessAuth(config, chain, store, options?.clock);
+    this.publicReads = new PublicChainCache(chain);
   }
 
   getPublicConfig(): PublicConfig {
@@ -197,12 +201,12 @@ export class Runtime {
 
   /** Global Brier leaderboard over finalized public chain state. */
   async getGlobalLeaderboard(): Promise<GlobalLeaderboard> {
-    return computeGlobalLeaderboard(this.chain, this.config.networkId, this.config.contractId);
+    return computeGlobalLeaderboard(this.publicReads, this.config.networkId, this.config.contractId);
   }
 
   /** Per-Question public comparison (scores only once the Outcome is final). */
   async getQuestionComparison(questionId: number): Promise<QuestionComparison | null> {
-    return computeQuestionComparison(this.chain, questionId);
+    return computeQuestionComparison(this.publicReads, questionId);
   }
 
   /** Deterministic offline simulation report (reused from @hivecast/simulation). */
@@ -223,12 +227,22 @@ export class Runtime {
       ...Object.values(this.config.agentAccounts),
     ]);
     return computeAccountEconomics(
-      this.chain,
+      this.publicReads,
       this.config.networkId,
       this.config.contractId,
       [...accounts],
       this.store.listPublicJournal(),
+      this.config.operationalGasReserveYocto,
     );
+  }
+
+  /**
+   * Finalized public transaction receipt projection (read-only, keyless):
+   * `final_execution_status`, whether the call produced a proven SuccessValue,
+   * and the yoctoNEAR `tokens_burnt` gas cost (null when not yet observable).
+   */
+  async getTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null> {
+    return this.chain.viewTxFinalStatus(txHash, accountId);
   }
 
   // -------------------------------------------------------------------------

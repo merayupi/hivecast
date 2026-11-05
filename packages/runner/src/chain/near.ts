@@ -20,7 +20,7 @@ import type {
   PendingWithdrawalView,
   QuestionView,
 } from '../types.js';
-import type { CallOutcome, ChainClient, PreparedCall, QuestionSpecArgs } from './types.js';
+import type { CallOutcome, ChainClient, PreparedCall, QuestionSpecArgs, TxFinalStatusView } from './types.js';
 
 const DEFAULT_GAS = teraToGas('50');
 const SETTLE_GAS = teraToGas('200');
@@ -270,10 +270,21 @@ export class NearChainClient implements ChainClient {
     return state.balance.available;
   }
 
-  /** Public keyless native balance: `amount` + `locked` (storage) — total balance. */
+  /** Public keyless native balance: `amount` (total balance, incl. storage). */
   async viewNativeBalance(accountId: string): Promise<bigint> {
     const state = await this.provider.viewAccount({ accountId, blockQuery: { finality: 'final' } });
-    return BigInt(state.amount) + BigInt(state.locked);
+    return state.amount;
+  }
+
+  /**
+   * Public keyless native SPENDABLE balance: `amount − locked` (storage-staked
+   * amount is excluded). This is the same figure the runner uses as its native
+   * base for stake sizing, before subtracting operational reserve/reservations.
+   */
+  async viewNativeAvailable(accountId: string): Promise<bigint> {
+    const state = await this.provider.viewAccount({ accountId, blockQuery: { finality: 'final' } });
+    const available = state.amount - state.locked;
+    return available < 0n ? 0n : available;
   }
 
   async viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null> {
@@ -302,13 +313,37 @@ export class NearChainClient implements ChainClient {
 
   /** Actual gas cost (tokens_burnt) of a finalized transaction, or null. */
   async viewTxTokensBurnt(txHash: string, signer: string): Promise<string | null> {
+    const view = await this.viewTxFinalStatus(txHash, signer);
+    return view?.tokens_burnt ?? null;
+  }
+
+  /** Finalized public transaction receipt projection (read-only, keyless). */
+  async viewTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null> {
     try {
-      const res = await this.provider.viewTransactionStatus({ txHash, accountId: signer });
-      const outcome = res.transaction_outcome?.outcome as { tokens_burnt?: string } | undefined;
-      if (outcome && typeof outcome.tokens_burnt === 'string') return outcome.tokens_burnt;
-      return null;
+      const res = await this.provider.viewTransactionStatus({ txHash, accountId });
+      if (typeof res !== 'object' || res === null || !('final_execution_status' in res)) {
+        return null;
+      }
+      const finalExecutionStatus =
+        typeof res.final_execution_status === 'string' ? res.final_execution_status : '';
+      let tokensBurnt: string | null = null;
+      let successValue = false;
+      if ('transaction_outcome' in res && typeof res.transaction_outcome === 'object' && res.transaction_outcome !== null) {
+        const outcome = res.transaction_outcome.outcome;
+        if (typeof outcome === 'object' && outcome !== null) {
+          if ('tokens_burnt' in outcome && typeof outcome.tokens_burnt === 'string') {
+            tokensBurnt = outcome.tokens_burnt;
+          }
+          if ('status' in outcome && typeof outcome.status === 'object' && outcome.status !== null && 'SuccessValue' in outcome.status) {
+            successValue = true;
+          }
+        }
+      }
+      return { tx_hash: txHash, final_execution_status: finalExecutionStatus, success_value: successValue, tokens_burnt: tokensBurnt };
     } catch {
-      return null; // not found / not finalized / unavailable — honest null
+      // Unknown tx / transient unavailability: honest null (the endpoint maps
+      // this to a 404/coverage note, never a fabricated status).
+      return null;
     }
   }
 

@@ -3,7 +3,7 @@
   "contractId": "hivecast-market-6c4d.testnet",
   "operatorId": "hivecast-1105-0548.testnet",
   "resolverId": "hivecast-1105-0548.testnet",
-  "rpcUrl": "https://archival-rpc.testnet.near.org",
+  "rpcUrl": "https://test.rpc.fastnear.com",
   "credentialDirectory": "C:/Users/YOU/.near-credentials/testnet",
   "databasePath": "./hivecast-runner.sqlite",
   "seed": 42,

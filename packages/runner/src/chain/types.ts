@@ -41,6 +41,17 @@ export interface PreparedCall {
   nonce: string;
 }
 
+/** Finalized public transaction receipt projection (read-only). */
+export interface TxFinalStatusView {
+  tx_hash: string;
+  /** Raw chain `final_execution_status` (only meaningful when `FINAL`). */
+  final_execution_status: string;
+  /** True only when the call produced a proven `SuccessValue`. */
+  success_value: boolean;
+  /** yoctoNEAR gas cost as a decimal string, or null when unobservable. */
+  tokens_burnt: string | null;
+}
+
 /** `create_question` wire args (decimal strings per the contract). */
 export interface QuestionSpecArgs {
   text: string;
@@ -81,6 +92,13 @@ export interface ChainClient {
   /** Public (keyless) native NEAR balance via `view_account` — no signing key
    * required, suitable for read-only projections over arbitrary accounts. */
   viewNativeBalance(accountId: string): Promise<bigint>;
+
+  /**
+   * Public (keyless) native SPENDABLE balance (`amount − locked` storage), the
+   * same figure the runner uses as its native base for stake sizing before
+   * subtracting operational reserve and private reservations.
+   */
+  viewNativeAvailable(accountId: string): Promise<bigint>;
   /**
    * Finalized permission of an account access key: `full-access` | `function-call`,
    * or `null` when the account or key definitively does not exist (fail-closed,
@@ -97,6 +115,15 @@ export interface ChainClient {
    * Query-Fee income.
    */
   viewTxTokensBurnt(txHash: string, signer: string): Promise<string | null>;
+
+  /**
+   * Finalized public transaction receipt projection (read-only, keyless):
+   * `final_execution_status` is the raw chain status (only meaningful when
+   * `FINAL`), `successValue` is true only when the function-call produced a
+   * proven `SuccessValue`, and `tokensBurnt` is the yoctoNEAR gas cost (null
+   * when not yet finalized/observable). Returns null when the tx is unknown.
+   */
+  viewTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null>;
 
   /**
    * Build + sign a contract call WITHOUT broadcasting. Persisting its bytes

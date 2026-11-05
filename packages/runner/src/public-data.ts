@@ -24,7 +24,8 @@ import { ONE_NEAR, settle } from '@hivecast/core';
 import { loadBundle, runReplay, defaultConfig, DEFAULT_SEED } from '@hivecast/simulation';
 import type { ReplayReport } from '@hivecast/simulation';
 import type { ChainClient } from './chain/types.js';
-import type { CommitmentView, Phase, QuestionView } from './types.js';
+import type { PublicReadSource } from './public-cache.js';
+import type { Phase, QuestionView } from './types.js';
 import type { PublicJournalRow } from './store.js';
 
 /** Brier error scale: (p - o)^2 with p,o in bps -> at most 10^8. */
@@ -121,11 +122,11 @@ export async function listAllQuestions(chain: ChainClient): Promise<QuestionView
  * contribute a Brier error; every accepted commitment counts as participation.
  */
 export async function computeGlobalLeaderboard(
-  chain: ChainClient,
+  source: PublicReadSource,
   networkId: string,
   contractId: string,
 ): Promise<GlobalLeaderboard> {
-  const questions = await listAllQuestions(chain);
+  const questions = await source.listAllQuestions();
   const resolved = questions.filter((q) => q.phase === 'resolved' || q.phase === 'settled');
 
   interface Acc {
@@ -146,12 +147,7 @@ export async function computeGlobalLeaderboard(
   };
 
   for (const q of questions) {
-    const commitments: CommitmentView[] = [];
-    for (let from = 0; from < 64; from += 64) {
-      const page = await chain.listCommitments(q.question_id, from, 64);
-      commitments.push(...page);
-      if (page.length < 64) break;
-    }
+    const commitments = await source.listAllCommitments(q.question_id);
     const terminal = q.phase === 'settled' || q.phase === 'cancelled';
     const outcome = q.outcome;
     for (const c of commitments) {
@@ -205,19 +201,14 @@ export async function computeGlobalLeaderboard(
 
 /** Per-Question public comparison. Scores exist only once the Outcome is final. */
 export async function computeQuestionComparison(
-  chain: ChainClient,
+  source: PublicReadSource,
   questionId: number,
 ): Promise<QuestionComparison | null> {
-  const q = await chain.getQuestion(questionId);
+  const q = (await source.listAllQuestions()).find((x) => x.question_id === questionId);
   if (!q) return null;
 
   const scoresPublic = (q.phase === 'resolved' || q.phase === 'settled') && q.outcome !== null;
-  const commitments: CommitmentView[] = [];
-  for (let from = 0; from < 64; from += 64) {
-    const page = await chain.listCommitments(questionId, from, 64);
-    commitments.push(...page);
-    if (page.length < 64) break;
-  }
+  const commitments = await source.listAllCommitments(questionId);
 
   const participants: ComparisonParticipant[] = commitments.map((c) => {
     const revealed = c.revealed !== null && c.revealed !== undefined ? c.revealed : null;
@@ -310,17 +301,19 @@ export interface EconomicsReport {
  * Exact live account economics. Wagering P&L and fee income are computed by
  * replaying each settled Round through the shared `settle` accounting (the
  * same module the contract mirrors); gas is summed from the public journal's
- * finalized transaction hashes via `tokens_burnt`. Only the caller-supplied
- * account set is fetched (bounded), never every on-chain account.
+ * finalized transaction hashes via `tokens_burnt` (confirmed AND failed
+ * finalized transactions — both burn gas). Only the caller-supplied account
+ * set is fetched (bounded), never every on-chain account.
  */
 export async function computeAccountEconomics(
-  chain: ChainClient,
+  source: PublicReadSource,
   networkId: string,
   contractId: string,
   accounts: readonly string[],
   publicJournal: readonly PublicJournalRow[],
+  operationalGasReserveYocto: bigint,
 ): Promise<EconomicsReport> {
-  const questions = await listAllQuestions(chain);
+  const questions = await source.listAllQuestions();
 
   interface Acc {
     accountId: string;
@@ -329,47 +322,57 @@ export async function computeAccountEconomics(
     feeIncome: bigint;
     gasBurnt: bigint;
     participated: boolean;
+    /** Finalized chain balance view (claimable/pending/received), or null. */
     balance: { claimable: string; pending: string; received: string } | null;
-    bankroll: string | null;
+    /** Native total balance (view_account `amount`), or null when unavailable. */
+    nativeTotal: bigint | null;
+    /** Native spendable balance (view_account `amount − locked`), or null. */
+    nativeAvailable: bigint | null;
   }
   const map = new Map<string, Acc>();
-  for (const id of accounts) {
-    map.set(id, { accountId: id, lockedStake: 0n, wageringPnl: 0n, feeIncome: 0n, gasBurnt: 0n, participated: false, balance: null, bankroll: null });
-  }
+  const empty = (accountId: string): Acc => ({
+    accountId,
+    lockedStake: 0n,
+    wageringPnl: 0n,
+    feeIncome: 0n,
+    gasBurnt: 0n,
+    participated: false,
+    balance: null,
+    nativeTotal: null,
+    nativeAvailable: null,
+  });
+  for (const id of accounts) map.set(id, empty(id));
   const ensure = (id: string): Acc => {
     let a = map.get(id);
     if (!a) {
-      a = { accountId: id, lockedStake: 0n, wageringPnl: 0n, feeIncome: 0n, gasBurnt: 0n, participated: false, balance: null, bankroll: null };
+      a = empty(id);
       map.set(id, a);
     }
     return a;
   };
 
-  // Gas: sum tokens_burnt over confirmed journal transactions per account.
-  const confirmedByAccount = new Map<string, string[]>();
+  // Gas: sum tokens_burnt over CONFIRMED and FAILED finalized journal
+  // transactions per account (a failed finalized tx still spent gas). An empty
+  // observed journal means genuine zero gas — not an unknown.
+  const finalizedByAccount = new Map<string, string[]>();
   for (const j of publicJournal) {
-    if (j.status !== 'confirmed' || !j.txHash || !j.accountId) continue;
-    const list = confirmedByAccount.get(j.accountId) ?? [];
+    if ((j.status !== 'confirmed' && j.status !== 'failed') || !j.txHash || !j.accountId) continue;
+    const list = finalizedByAccount.get(j.accountId) ?? [];
     list.push(j.txHash);
-    confirmedByAccount.set(j.accountId, list);
+    finalizedByAccount.set(j.accountId, list);
   }
   const gasByAccount = new Map<string, bigint>();
-  for (const [accountId, hashes] of confirmedByAccount) {
+  for (const [accountId, hashes] of finalizedByAccount) {
     let sum = 0n;
     for (const h of hashes) {
-      const burnt = await chain.viewTxTokensBurnt(h, accountId);
+      const burnt = await source.viewTxTokensBurnt(h, accountId);
       if (burnt !== null) sum += BigInt(burnt);
     }
-    if (sum > 0n || hashes.length > 0) gasByAccount.set(accountId, sum);
+    gasByAccount.set(accountId, sum);
   }
 
   for (const q of questions) {
-    const commitments: CommitmentView[] = [];
-    for (let from = 0; from < 64; from += 64) {
-      const page = await chain.listCommitments(q.question_id, from, 64);
-      commitments.push(...page);
-      if (page.length < 64) break;
-    }
+    const commitments = await source.listAllCommitments(q.question_id);
     const terminal = q.phase === 'settled' || q.phase === 'cancelled';
 
     for (const c of commitments) {
@@ -399,32 +402,47 @@ export async function computeAccountEconomics(
     // part of an Agent's wagering economics, so nothing is added here.
   }
 
-  // Bankroll + final balance view per account (bounded set). Bankroll uses the
-  // keyless `view_account` native balance (amount+locked) so read-only
-  // projections never need a signing key.
+  // Native + final balance view per account (bounded set). Keyless
+  // `view_account` reads (coalesced by the cache), so read-only projections
+  // never need a signing key. Failures surface as null, never a fake zero.
   for (const id of accounts) {
     const a = map.get(id)!;
-    try {
-      a.bankroll = (await chain.viewNativeBalance(id)).toString();
-    } catch {
-      a.bankroll = null;
-    }
-    try {
-      const b = await chain.getBalance(id);
-      a.balance = { claimable: b.claimable, pending: b.pending, received: b.received };
-    } catch {
-      a.balance = null;
-    }
+    a.nativeTotal = await source.viewNativeBalance(id);
+    a.nativeAvailable = await source.viewNativeAvailable(id);
+    const b = await source.getBalance(id);
+    if (b) a.balance = { claimable: b.claimable, pending: b.pending, received: b.received };
   }
 
   const rows: AccountEconomics[] = [...map.values()]
-    .filter((a) => a.participated || a.balance !== null || gasByAccount.has(a.accountId))
+    .filter((a) => a.participated || a.balance !== null || a.nativeTotal !== null || gasByAccount.has(a.accountId))
     .map((a) => {
-      const available = a.bankroll === null ? null : BigInt(a.bankroll) - a.lockedStake < 0n ? 0n : BigInt(a.bankroll) - a.lockedStake;
+      const claimable = a.balance ? BigInt(a.balance.claimable) : 0n;
+      const pending = a.balance ? BigInt(a.balance.pending) : 0n;
+      // Bankroll = native total + claimable + locked round stake. `received` is
+      // already inside native total (delivered), and `pending` is excluded when
+      // non-zero because an in-flight transfer may already be reflected in the
+      // native balance (callback lag) — reporting null is honest, not a double
+      // count. Null whenever the native view is unavailable.
+      const bankroll =
+        a.nativeTotal === null
+          ? null
+          : pending > 0n
+            ? null
+            : (a.nativeTotal + claimable + a.lockedStake).toString();
+      // Available mirrors the runner's stake base: native spendable (amount −
+      // locked storage) minus the operational gas reserve. Private capital
+      // reservations are invisible to a keyless projection, so the true
+      // spendable may be lower; that is disclosed in the separation note.
+      const available =
+        a.nativeAvailable === null
+          ? null
+          : (a.nativeAvailable - operationalGasReserveYocto < 0n
+              ? 0n
+              : a.nativeAvailable - operationalGasReserveYocto).toString();
       return {
         account_id: a.accountId,
-        bankroll: a.bankroll,
-        available: available === null ? null : available.toString(),
+        bankroll,
+        available,
         locked_stake: a.lockedStake.toString(),
         claimable: a.balance?.claimable ?? '0',
         pending: a.balance?.pending ?? '0',
@@ -442,7 +460,7 @@ export async function computeAccountEconomics(
     contract_id: contractId,
     generated_at: new Date().toISOString(),
     separation_note:
-      'Wagering P&L, Query-Fee income, and gas are separate. Gas is an operational cost (paid by the Operator), never netted into a participant wagering profit or fee income. Available = bankroll − locked stake is a public projection that cannot see private capital reservations.',
+      'Wagering P&L, Query-Fee income, and gas are separate. Gas is an operational cost (paid by the Operator, summing tokens_burnt over confirmed and failed finalized transactions), never netted into a participant wagering profit or fee income. Available = native spendable (amount − storage-locked) minus the operational gas reserve; private capital reservations are invisible to this public projection, so the true spendable may be lower. Bankroll = native total + claimable + locked round stake, reported null while a withdrawal is in-flight (pending) because the transfer may already be reflected in the native balance.',
     accounts: rows,
   };
 }

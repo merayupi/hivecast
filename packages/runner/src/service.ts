@@ -174,6 +174,19 @@ export function createPublicService(runtime: Runtime): Server {
         return sendJson(res, 200, economics, runtime);
       }
 
+      // ---- Public finalized transaction receipt (read-only, keyless) -------
+
+      if (req.method === 'GET' && parts[0] === 'tx' && parts[1]) {
+        const txHash = parts[1];
+        const accountId = url.searchParams.get('account_id') ?? '';
+        if (!accountId) {
+          return sendJson(res, 400, { error: 'missing_account_id' }, runtime);
+        }
+        const view = await runtime.getTxFinalStatus(txHash, accountId);
+        if (!view) return sendJson(res, 404, { error: 'not_found' }, runtime);
+        return sendJson(res, 200, view, runtime);
+      }
+
       // ---- Forecast Access authentication ---------------------------------
 
       if (req.method === 'POST' && url.pathname === '/auth/challenge') {
