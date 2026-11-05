@@ -36,19 +36,20 @@ jobs:
       - name: Install near-sandbox binary (Linux x86_64)
         run: |
           set -eux
-          mkdir -p "$HOME/.near/near-sandbox-2.0.0" /tmp/hc-sandbox-extract
+          mkdir -p "$HOME/.near/near-sandbox-2.14.0-rc.5" /tmp/hc-sandbox-extract
           curl -fsSL \
-            "https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.0.0/near-sandbox.tar.gz" \
+            "https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0-rc.5/near-sandbox.tar.gz" \
             -o /tmp/hc-sandbox.tar.gz
           tar -xzf /tmp/hc-sandbox.tar.gz -C /tmp/hc-sandbox-extract
           BIN="$(find /tmp/hc-sandbox-extract -type f -name 'near-sandbox' | head -n1)"
           test -n "$BIN"
-          mv "$BIN" "$HOME/.near/near-sandbox-2.0.0/near-sandbox"
-          chmod +x "$HOME/.near/near-sandbox-2.0.0/near-sandbox"
-          "$HOME/.near/near-sandbox-2.0.0/near-sandbox" --version || true
+          mv "$BIN" "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox"
+          chmod +x "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox"
+          "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox" --version || true
 
       - name: Run real near-sandbox Forecast Access proof
         working-directory: packages/runner
         env:
           HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
+          NEAR_SANDBOX_BIN_PATH: ${{ env.HOME }}/.near/near-sandbox-2.14.0-rc.5/near-sandbox
         run: npm run sandbox:access
