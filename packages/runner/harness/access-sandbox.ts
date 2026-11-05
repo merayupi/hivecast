@@ -47,6 +47,7 @@ import { Runner } from '../src/runner.js';
 import { Runtime } from '../src/runtime.js';
 import { createPublicService } from '../src/service.js';
 import { Store } from '../src/store.js';
+import type { LocalQuestion } from '../src/types.js';
 import type { AccessClock } from '../src/access/index.js';
 
 const WASM_PATH = process.env.HIVECAST_WASM ?? 'contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm';
@@ -488,9 +489,31 @@ async function main(): Promise<void> {
       };
     }
 
-    // Persist the frozen snapshot privately (participant count 1, aggregate =
-    // the single agent's 5000 bps, stake = min_stake).
+    // Persist the local Question context (bound to network/contract via the
+    // Store binding) AND the frozen snapshot privately, exactly as the real
+    // runner persists both before serving delivery. The delivery path requires
+    // the local question for domain/source_label context.
     const store = new Store(dbPath, 'sandbox', contractId);
+    const localQuestion: LocalQuestion = {
+      questionId,
+      domain: 'price',
+      text: 'Will the target hour close higher than it opened?',
+      eventDefinition: 'Binance spot NEARUSDT 1h candle: YES means close > open',
+      sourceJson: JSON.stringify({ instrument: 'NEARUSDT', interval: '1h' }),
+      sourceLabel: 'Binance NEARUSDT 1h',
+      resolver: resolver.accountId,
+      openTimeNs: openTime,
+      closeTimeNs: closeTime,
+      observationStartNs: obsStart,
+      observationEndNs: obsEnd,
+      resolveTimeNs: obsEnd,
+      resolveDeadlineNs: resolveDeadline,
+      revealWindowNs: revealWindow,
+      accessPrice,
+      minStake,
+      participants: [{ agentId: 'coinflip', accountId: agent.accountId }],
+    };
+    store.saveQuestion(localQuestion, `price:${questionId}`);
     store.saveSnapshot({
       questionId,
       snapshotId,
