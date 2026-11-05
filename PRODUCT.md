@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-Vite + React + TypeScript + Tailwind CSS + Lucide (decided in the approved implementation plan; no SSR). Wallet integration via `@hot-labs/near-connect@0.12.0` and `near-api-js@7.4.0` against real NEAR testnet; a Vite dev proxy forwards browser requests (with cookies) to the runner public HTTP service. This section is delegated per the approved plan, not a user interview.
+Vite + React + TypeScript + Tailwind CSS + Lucide (decided in the approved implementation plan; no SSR). Wallet integration via the official `@near-wallet-selector/core` + `@near-wallet-selector/meteor-wallet` adapter against real NEAR testnet; a Vite dev proxy forwards browser requests (with cookies) to the runner public HTTP service. This section is delegated per the approved plan, not a user interview.
 
 ## Users
 
