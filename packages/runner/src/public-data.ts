@@ -78,8 +78,18 @@ export interface GlobalLeaderboard {
   network_id: string;
   contract_id: string;
   generated_at: string;
+  /** On-chain question count (the cursor's target). */
   total_questions: number;
+  /** Number of questions actually materialized so far (partial while bootstrapping). */
+  fetched_questions: number;
   resolved_questions: number;
+  /**
+   * 'complete' when the full on-chain question history has been bootstrapped
+   * and all live rounds have been re-read; 'partial' while the cursor is still
+   * catching up. Callers must render partial figures (esp. locked_stake and
+   * rounds_participated) as provisional, never as a final global total.
+   */
+  coverage: 'complete' | 'partial';
   /**
    * Gas is reported separately and is not netted into wagering profit or
    * Query-Fee income. Per-agent gas is not queryable on-chain, so the live
@@ -128,6 +138,10 @@ export async function computeGlobalLeaderboard(
 ): Promise<GlobalLeaderboard> {
   const questions = await source.listAllQuestions();
   const resolved = questions.filter((q) => q.phase === 'resolved' || q.phase === 'settled');
+  const coverageInfo = source.getCoverageInfo();
+  const coverage = coverageInfo.complete ? 'complete' : 'partial';
+  const fetchedQuestions = coverageInfo.fetchedQuestions;
+  const totalQuestions = coverageInfo.totalQuestions;
 
   interface Acc {
     participated: number;
@@ -191,8 +205,10 @@ export async function computeGlobalLeaderboard(
     network_id: networkId,
     contract_id: contractId,
     generated_at: new Date().toISOString(),
-    total_questions: questions.length,
+    total_questions: totalQuestions,
+    fetched_questions: fetchedQuestions,
     resolved_questions: resolved.length,
+    coverage,
     gas_disclosure:
       'Gas is reported separately and is never netted into wagering profit or Query-Fee income; per-agent gas is not queryable on-chain. Per-account balances are served by the wallet-scoped balance view.',
     entries,
@@ -269,8 +285,9 @@ export interface AccountEconomics {
   /** Available = native spendable − operational reserve − local reservations
    * (`null` when the native view is unavailable). */
   available: string | null;
-  /** Stake locked in non-terminal (open/closed/resolved) rounds. */
-  locked_stake: string;
+  /** Stake locked in non-terminal (open/closed/resolved) rounds; `null` while
+   * the question history is still bootstrapping (partial coverage). */
+  locked_stake: string | null;
   /** Finalized chain balance view (claimable/pending/received); each is `null`
    * when the ledger view is unobserved — never a fabricated zero. */
   claimable: string | null;
@@ -298,6 +315,17 @@ export interface EconomicsReport {
   network_id: string;
   contract_id: string;
   generated_at: string;
+  /** On-chain question count (the cursor's target). */
+  total_questions: number;
+  /** Number of questions actually materialized so far. */
+  fetched_questions: number;
+  /**
+   * 'complete' when the full on-chain question history has been bootstrapped;
+   * 'partial' while the cursor is still catching up. While partial, bankroll/
+   * locked_stake are NULL (a partial cohort cannot be presented as total
+   * capital), and per-account locked_stake is only the known subset.
+   */
+  coverage: 'complete' | 'partial';
   /**
    * Wagering P&L, Query-Fee income, and gas are reported separately. Gas is a
    * cost the Operator pays out of operational reserves, never netted into a
@@ -324,6 +352,8 @@ export async function computeAccountEconomics(
   operationalGasReserveYocto: bigint,
 ): Promise<EconomicsReport> {
   const questions = await source.listAllQuestions();
+  const coverageInfo = source.getCoverageInfo();
+  const coverage = coverageInfo.complete ? 'complete' : 'partial';
 
   interface Acc {
     accountId: string;
@@ -428,20 +458,18 @@ export async function computeAccountEconomics(
   const rows: AccountEconomics[] = [...map.values()].map((a) => {
       const claimable = a.balance ? BigInt(a.balance.claimable) : 0n;
       const pending = a.balance ? BigInt(a.balance.pending) : 0n;
-      // Bankroll = native total + claimable + locked round stake. `received` is
-      // already inside native total (delivered). If the native total OR the
-      // ledger balance view is unobserved, report null (never a fabricated low).
       const ledgerObserved = a.balance !== null;
+      // While the full question history is NOT bootstrapped, a partial cohort
+      // cannot be presented as a complete Bankroll/locked-stake total: report
+      // both as null (unknown), never a partial sum dressed up as total capital.
+      const knownLocked = coverage === 'complete' ? a.lockedStake : null;
       const bankroll =
-        a.nativeTotal === null || !ledgerObserved
+        a.nativeTotal === null || !ledgerObserved || knownLocked === null
           ? null
           : pending > 0n
             ? null
-            : (a.nativeTotal + claimable + a.lockedStake).toString();
-      // Available mirrors the runner's stake base exactly: native spendable
-      // (amount − storage-locked) minus the operational gas reserve minus the
-      // account's durable local capital reservations. Reservation read failure
-      // propagates (never fabricates 0), and a missing native view is null.
+            : (a.nativeTotal + claimable + knownLocked).toString();
+
       let available: string | null;
       if (a.nativeAvailable === null) {
         available = null;
@@ -469,7 +497,7 @@ export async function computeAccountEconomics(
         account_id: a.accountId,
         bankroll,
         available,
-        locked_stake: a.lockedStake.toString(),
+        locked_stake: knownLocked === null ? null : knownLocked.toString(),
         claimable: a.balance?.claimable ?? null,
         pending: a.balance?.pending ?? null,
         received: a.balance?.received ?? null,
@@ -486,8 +514,11 @@ export async function computeAccountEconomics(
     network_id: networkId,
     contract_id: contractId,
     generated_at: new Date().toISOString(),
+    total_questions: coverageInfo.totalQuestions,
+    fetched_questions: coverageInfo.fetchedQuestions,
+    coverage,
     separation_note:
-      'Wagering P&L, Query-Fee income, and gas are separate. Gas is an operational cost (paid by the Operator, summing tokens_burnt over finalized transactions; an empty journal means zero observed transactions, not a claim that no external gas existed). Available = native spendable (amount − storage-locked) minus the operational gas reserve minus the account\'s durable local capital reservations. Bankroll = native total + claimable + locked round stake, reported null while a withdrawal is in-flight (pending) or when the native/ledger view is unobserved.',
+      'Wagering P&L, Query-Fee income, and gas are separate. Gas is an operational cost (paid by the Operator, summing tokens_burnt over finalized transactions; an empty journal means zero observed transactions, not a claim that no external gas existed). Available = native spendable (amount − storage-locked) minus the operational gas reserve minus the account\'s durable local capital reservations. Bankroll = native total + claimable + locked round stake, reported null while a withdrawal is in-flight (pending), when the native/ledger view is unobserved, or while the question history is still bootstrapping (partial coverage).',
     accounts: rows,
   };
 }

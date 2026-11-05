@@ -246,6 +246,13 @@ export class Store {
         materialized_at INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS public_questions (
+        question_id INTEGER PRIMARY KEY,
+        phase TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        observed_at INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS public_tx_gas (
         tx_hash TEXT PRIMARY KEY,
         account_id TEXT NOT NULL,
@@ -255,6 +262,52 @@ export class Store {
         cached_at INTEGER NOT NULL
       );
     `);
+  }
+
+  // -------------------------------------------------------------------------
+  // Public question view persistence (ALL discovered views, never dropped)
+  // -------------------------------------------------------------------------
+
+  savePublicQuestion(questionId: number, phase: string, dataJson: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO public_questions (question_id, phase, data_json, observed_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(questionId, phase, dataJson, Date.now());
+  }
+
+  getPublicQuestion(questionId: number): { phase: string; dataJson: string } | null {
+    const row = this.db
+      .prepare('SELECT phase, data_json FROM public_questions WHERE question_id = ?')
+      .get(questionId) as { phase: string; data_json: string } | undefined;
+    return row ? { phase: row.phase, dataJson: row.data_json } : null;
+  }
+
+  listPublicQuestions(): { questionId: number; phase: string; dataJson: string }[] {
+    const rows = this.db
+      .prepare('SELECT question_id, phase, data_json FROM public_questions ORDER BY question_id ASC')
+      .all() as { question_id: number; phase: string; data_json: string }[];
+    return rows.map((r) => ({ questionId: r.question_id, phase: r.phase, dataJson: r.data_json }));
+  }
+
+  /** The highest question_id fetched so far (persistent cursor). */
+  getPublicCursor(): number {
+    const raw = this.getMeta('public_fetch_cursor');
+    if (!raw) return 0;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+
+  setPublicCursor(n: number): void {
+    this.setMeta('public_fetch_cursor', String(n));
+  }
+
+  getPublicObservedCount(): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS c FROM public_questions')
+      .get() as { c: number };
+    return row.c;
   }
 
   // -------------------------------------------------------------------------

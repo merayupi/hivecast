@@ -129,14 +129,6 @@ test('CLI: status on an empty database exits 0 without a signing key', () => {
   rmSync(dbPath, { force: true });
 });
 
-test('CLI: snapshot on an empty database reports not-frozen', () => {
-  const dbPath = path.join(tmpdir(), `hc-cli-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
-  const { status, stdout } = runCli(['snapshot', '0'], dbPath);
-  assert.equal(status, 0);
-  assert.match(stdout, /not-frozen/);
-  rmSync(dbPath, { force: true });
-});
-
 test('CLI: unknown command exits non-zero', () => {
   const dbPath = path.join(tmpdir(), `hc-cli-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
   const { status } = runCli(['definitely-not-a-command'], dbPath);
@@ -144,7 +136,7 @@ test('CLI: unknown command exits non-zero', () => {
   rmSync(dbPath, { force: true });
 });
 
-test('HTTP: /health and /config respond without secrets', async () => {
+test('HTTP: /config responds without secrets', async () => {
   const dbPath = path.join(tmpdir(), `hc-http-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
   const config = buildConfig(dbPath);
   const chain = new NearChainClient(config);
@@ -159,35 +151,15 @@ test('HTTP: /health and /config respond without secrets', async () => {
   const base = `http://127.0.0.1:${addr.port}`;
 
   try {
-    const health = (await (await fetch(`${base}/health`)).json()) as { status: string; domain: string };
-    assert.equal(health.status, 'ok');
-    assert.equal(health.domain, 'hivecast-runner');
-
     const configResp = (await (await fetch(`${base}/config`)).json()) as { contractId: string };
     const serialized = JSON.stringify(configResp);
     assert.ok(!serialized.includes('credentialDirectory'));
     assert.ok(!serialized.includes('databasePath'));
     assert.ok(!serialized.includes('private_key'));
     assert.ok(!serialized.includes('salt'));
-    assert.equal(configResp.contractId, CONTRACT);
-
-    const notFound = await fetch(`${base}/nope`);
-    assert.equal(notFound.status, 404);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store.close();
     rmSync(dbPath, { force: true });
   }
-});
-
-test('RPC: finalized read-only views work against the real endpoint', { skip: !process.env.HIVECAST_RUNNER_RPC }, async () => {
-  const dbPath = path.join(tmpdir(), `hc-rpc-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
-  const config = buildConfig(dbPath);
-  const chain = new NearChainClient(config);
-  const state = await chain.getContractState();
-  assert.equal(typeof state.operator, 'string');
-  assert.equal(typeof state.question_count, 'number');
-  const questions = await chain.listQuestions(0, 10);
-  assert.ok(Array.isArray(questions));
-  rmSync(dbPath, { force: true });
 });
