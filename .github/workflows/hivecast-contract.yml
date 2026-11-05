@@ -16,7 +16,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -25,10 +25,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: contracts/hivecast
+          cache-on-failure: true
 
       - name: Build deployable WASM
         working-directory: contracts/hivecast
         run: RUSTFLAGS='-C link-arg=-s' cargo build --target wasm32-unknown-unknown --release
+
+      # Compile every test target first so native sandbox type errors surface
+      # even if the lib test body has an unrelated failure.
+      - name: Compile all test targets (no-run)
+        working-directory: contracts/hivecast
+        run: cargo test --no-run
 
       - name: Run public-interface unit tests (near-sdk mock VM)
         working-directory: contracts/hivecast
