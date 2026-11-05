@@ -79,8 +79,14 @@ async fn advance_to(worker: &Worker<Sandbox>, target_ns: u64) -> anyhow::Result<
 
 /// Deploy the contract, fund it for storage sponsorship, and create the
 /// operator, resolver, and buyer subaccounts.
+/// near-sandbox node version pinned to match the runtime that parses the
+/// current-compiler WASM (nearcore 2.14.0-rc.5, protocol 88). The
+/// near-workspaces 0.13 default (2.0.0, Aug 2024) predates the toolchain that
+/// produces this WASM and fails init with PrepareError/Deserialization.
+const SANDBOX_VERSION: &str = "2.14.0-rc.5";
+
 async fn deploy() -> anyhow::Result<(Worker<Sandbox>, Contract, Account, Account, Account)> {
-    let worker = near_workspaces::sandbox().await?;
+    let worker = near_workspaces::sandbox_with_version(SANDBOX_VERSION).await?;
     // Deploy the already-built release WASM artifact (built by the workflow's
     // earlier `cargo build --target wasm32-unknown-unknown --release` step)
     // rather than invoking `compile_project`, which re-runs cargo with the
@@ -101,7 +107,8 @@ async fn deploy() -> anyhow::Result<(Worker<Sandbox>, Contract, Account, Account
     worker
         .root_account()?
         .transfer_near(contract.id(), NearToken::from_near(1_000))
-        .await?;
+        .await?
+        .into_result()?;
 
     let root = contract.as_account();
     let operator = root
