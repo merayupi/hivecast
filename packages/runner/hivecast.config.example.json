@@ -1,0 +1,52 @@
+/**
+ * Example runner configuration WITHOUT keys.
+ *
+ * Copy to `hivecast.config.json` (git-ignored) and fill in your own testnet
+ * account ids + credential directory. Credentials are referenced by file path
+ * (`credentialDirectory/<account_id>.json`, near CLI layout) — never inline
+ * secrets here.
+ *
+ * `chainMode`:
+ *   - "rpc"      : real NEAR testnet RPC + ed25519 signing
+ *   - "emulated" : cross-platform in-process sandbox (no network, no keys)
+ *
+ * Scripts:
+ *   npm run cli --workspace @hivecast/runner -- create-price <hourStartMs>
+ *   npm run cli --workspace @hivecast/runner -- create-weather <YYYY-MM-DD>
+ *   npm run cli --workspace @hivecast/runner -- tick
+ *   npm run cli --workspace @hivecast/runner -- status
+ *   npm run service --workspace @hivecast/runner
+ */
+
+{
+  "networkId": "testnet",
+  "contractId": "hivecast-market-6c4d.testnet",
+  "operatorId": "hivecast-1105-0548.testnet",
+  "resolverId": "hivecast-1105-0548.testnet",
+  "rpcUrl": "https://rpc.testnet.near.org",
+  "credentialDirectory": "C:/Users/YOU/.near-credentials/testnet",
+  "databasePath": "./hivecast-runner.sqlite",
+  "seed": 42,
+  "pollIntervalMs": 60000,
+  "minStakeYocto": "100000000000000000000000",
+  "accessPriceYocto": "10000000000000000000000",
+  "operationalGasReserveYocto": "50000000000000000000000",
+  "binanceBaseUrl": "https://api.binance.com",
+  "openMeteoBaseUrl": "https://api.open-meteo.com",
+  "kudusLatitude": "-6.8049",
+  "kudusLongitude": "110.8397",
+  "kudusTimezone": "Asia/Jakarta",
+  "weatherModel": "ecmwf_ifs04",
+  "chainMode": "emulated",
+  "http": { "enabled": false, "host": "127.0.0.1", "port": 8787 },
+  "agentAccounts": {
+    "meteo": "meteo.hivecast-1105-0548.testnet",
+    "climatology": "climatology.hivecast-1105-0548.testnet",
+    "persistence": "persistence.hivecast-1105-0548.testnet",
+    "momentum": "momentum.hivecast-1105-0548.testnet",
+    "meanrev": "meanrev.hivecast-1105-0548.testnet",
+    "noisy-trend": "noisy-trend.hivecast-1105-0548.testnet",
+    "yolo": "yolo.hivecast-1105-0548.testnet",
+    "coinflip": "coinflip.hivecast-1105-0548.testnet"
+  }
+}
