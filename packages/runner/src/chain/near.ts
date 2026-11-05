@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Account, JsonRpcProvider, SignedTransaction, actions, baseEncode, teraToGas } from 'near-api-js';
 import type { KeyPairString } from 'near-api-js';
-import { AccountDoesNotExistError, AccessKeyDoesNotExistError, UnknownTransactionError, InvalidTransactionError, InvalidNonceError } from 'near-api-js/rpc-errors';
+import { AccountDoesNotExistError, AccessKeyDoesNotExistError, UnknownTransactionError, InvalidTransactionError, InvalidNonceError, TransactionExpiredError } from 'near-api-js/rpc-errors';
 import type { RunnerConfig } from '../config.js';
 import type {
   BalanceView,
@@ -231,6 +231,19 @@ export class NearChainClient implements ChainClient {
           error: (err as Error).message,
           status: 'failure',
           nonceStale: true,
+        };
+      }
+      // DEFINITIVE expiry rejection: the signed tx's blockHash went stale (it
+      // can never be accepted on rebroadcast). Re-prepare a FRESH signed tx
+      // (new blockHash) for the SAME intent — never an arbitrary timeout.
+      if (err instanceof TransactionExpiredError) {
+        return {
+          txHash: canonicalHash,
+          success: false,
+          result: null,
+          error: (err as Error).message,
+          status: 'failure',
+          txExpired: true,
         };
       }
       // Uncertain network error: inclusion status is unknown. Keep the
