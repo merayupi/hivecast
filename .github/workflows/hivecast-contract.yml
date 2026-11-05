@@ -1,0 +1,46 @@
+name: HiveCast Contract
+
+on:
+  workflow_dispatch:
+  # Run automatically when the integration branch is pushed (workflow_dispatch
+  # alone requires the workflow to already exist on the default branch, which
+  # is not part of this repo's flow).
+  push:
+    branches:
+      - integration/hivecast-spec-1
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/hivecast-contract.yml'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/hivecast
+
+      - name: Build deployable WASM
+        working-directory: contracts/hivecast
+        run: RUSTFLAGS='-C link-arg=-s' cargo build --target wasm32-unknown-unknown --release
+
+      - name: Run public-interface unit tests (near-sdk mock VM)
+        working-directory: contracts/hivecast
+        run: cargo test --lib
+
+      - name: Run real near-sandbox lifecycle tests
+        working-directory: contracts/hivecast
+        run: cargo test --test sandbox -- --nocapture
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hivecast.wasm
+          path: contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
+          if-no-files-found: error

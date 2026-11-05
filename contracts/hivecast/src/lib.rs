@@ -12,6 +12,7 @@
 mod commitment;
 mod scoring;
 
+use near_sdk::borsh;
 use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::{U128, U64};
 use near_sdk::serde::Serialize;
@@ -75,6 +76,7 @@ enum StorageKey {
     PendingWithdrawals,
     AccountWithdrawals,
     NextNonce,
+    TotalLiabilities,
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +381,11 @@ pub struct HiveCast {
     pending_withdrawals: LookupMap<u64, PendingWithdrawal>,
     account_withdrawals: LookupMap<AccountId, Vec<u64>>,
     next_nonce: Lazy<u64>,
+    /// Sum of all yoctoNEAR currently owed to users (active escrow stake/fee,
+    /// claimable entitlements, and pending transfers not yet delivered).
+    /// Decreases only when a withdrawal transfer is actually delivered; this is
+    /// the authoritative floor the storage-sponsorship check must preserve.
+    total_liabilities: Lazy<u128>,
 }
 
 #[near]
@@ -397,6 +404,7 @@ impl HiveCast {
             pending_withdrawals: LookupMap::new(StorageKey::PendingWithdrawals),
             account_withdrawals: LookupMap::new(StorageKey::AccountWithdrawals),
             next_nonce: Lazy::new(StorageKey::NextNonce, 0u64),
+            total_liabilities: Lazy::new(StorageKey::TotalLiabilities, 0u128),
         }
     }
 
@@ -451,17 +459,11 @@ impl HiveCast {
         let question_id = *self.next_question_id.get();
         self.next_question_id.set(question_id + 1);
 
-        // Reject if sponsorship cannot cover the new question record.
-        self.ensure_storage_growth(
-            10_000,
-            &format!("question {question_id}"),
-        );
-
         let q = Question {
             text: spec.text,
             event_definition: spec.event_definition,
             source: spec.source,
-            resolver: spec.resolver,
+            resolver: spec.resolver.clone(),
             open_time,
             close_time,
             observation_start,
@@ -484,13 +486,21 @@ impl HiveCast {
             participant_count: 0,
             buyer_count: 0,
         };
+
+        // Precise storage admission (key + value + record overhead), with no
+        // incoming liability (questions carry no user funds).
+        let key_bytes = borsh::to_vec(&question_id).expect("question key ser").len() as u64;
+        let value_bytes = borsh::to_vec(&q).expect("question value ser").len() as u64;
+        let additional = key_bytes + value_bytes + 2 * RECORD_OVERHEAD;
+        self.ensure_storage_growth(additional, 0, &format!("question {question_id}"));
+
         self.questions.insert(question_id, q);
 
         emit(
             "question_created",
             &QuestionCreatedEvent {
                 question_id,
-                resolver: env::predecessor_account_id(),
+                resolver: spec.resolver,
                 access_price: fmt_u128(access_price),
                 min_stake: fmt_u128(min_stake),
             },
@@ -506,7 +516,9 @@ impl HiveCast {
     #[payable]
     pub fn commit(&mut self, question_id: u64, hash: String) {
         let now = env::block_timestamp();
-        let account = env::signer_account_id();
+        // The owner of the stake is the predecessor account that actually
+        // attached the deposit, not a signer behind a cross-contract relay.
+        let account = env::predecessor_account_id();
         let stake = env::attached_deposit().as_yoctonear();
 
         let mut q = self
@@ -532,27 +544,39 @@ impl HiveCast {
             .and_then(|v| v.try_into().ok())
             .unwrap_or_else(|| env::panic_str("Invalid commitment hash"));
 
-        self.ensure_storage_growth(
-            256,
-            &format!("commitment {question_id} {account}"),
-        );
-
         let commitment = Commitment {
             hash: hash_bytes,
             stake,
             revealed: None,
         };
-        self.commitments
-            .insert((question_id, account.clone()), commitment);
 
-        // Append to the per-question participant index (bounded <= 64).
-        let mut participants = self
+        // Precise storage admission: commitment record + the growth of the
+        // per-question participant index. The incoming stake is a NEW
+        // liability that must not subsidize its own storage.
+        let key_bytes = borsh::to_vec(&(question_id, account.clone()))
+            .expect("commitment key ser")
+            .len() as u64;
+        let value_bytes = borsh::to_vec(&commitment).expect("commitment value ser").len() as u64;
+        let mut additional = key_bytes + value_bytes + 2 * RECORD_OVERHEAD;
+
+        let old_participants = self
             .question_participants
             .get(&question_id)
             .cloned()
             .unwrap_or_default();
-        participants.push(account.clone());
-        self.question_participants.insert(question_id, participants);
+        let old_idx_bytes = borsh::to_vec(&old_participants).expect("idx ser").len() as u64;
+        let mut new_participants = old_participants;
+        new_participants.push(account.clone());
+        let new_idx_bytes = borsh::to_vec(&new_participants).expect("idx ser").len() as u64;
+        additional += new_idx_bytes.saturating_sub(old_idx_bytes);
+
+        self.ensure_storage_growth(additional, stake, &format!("commitment {question_id} {account}"));
+
+        self.commitments
+            .insert((question_id, account.clone()), commitment);
+        self.question_participants.insert(question_id, new_participants);
+
+        self.add_liability(stake);
 
         q.total_stake += stake;
         q.participant_count += 1;
@@ -612,7 +636,8 @@ impl HiveCast {
     #[payable]
     pub fn buy_forecast(&mut self, question_id: u64) {
         let now = env::block_timestamp();
-        let account = env::signer_account_id();
+        // Buyer identity is the predecessor actually attaching the payment.
+        let account = env::predecessor_account_id();
         let attached = env::attached_deposit().as_yoctonear();
 
         let mut q = self
@@ -638,26 +663,36 @@ impl HiveCast {
             "Fee pool exceeds cap"
         );
 
-        self.ensure_storage_growth(
-            256,
-            &format!("buyer {question_id} {account}"),
-        );
+        let receipt = BuyerReceipt {
+            price: attached,
+            refunded: false,
+        };
 
-        self.buyers.insert(
-            (question_id, account.clone()),
-            BuyerReceipt {
-                price: attached,
-                refunded: false,
-            },
-        );
+        // Precise storage admission: buyer receipt + buyer-index growth. The
+        // attached fee is a NEW liability that must not subsidize its storage.
+        let key_bytes = borsh::to_vec(&(question_id, account.clone()))
+            .expect("buyer key ser")
+            .len() as u64;
+        let value_bytes = borsh::to_vec(&receipt).expect("buyer value ser").len() as u64;
+        let mut additional = key_bytes + value_bytes + 2 * RECORD_OVERHEAD;
 
-        let mut buyers_list = self
+        let old_buyers = self
             .question_buyers
             .get(&question_id)
             .cloned()
             .unwrap_or_default();
-        buyers_list.push(account.clone());
-        self.question_buyers.insert(question_id, buyers_list);
+        let old_idx_bytes = borsh::to_vec(&old_buyers).expect("idx ser").len() as u64;
+        let mut new_buyers = old_buyers;
+        new_buyers.push(account.clone());
+        let new_idx_bytes = borsh::to_vec(&new_buyers).expect("idx ser").len() as u64;
+        additional += new_idx_bytes.saturating_sub(old_idx_bytes);
+
+        self.ensure_storage_growth(additional, attached, &format!("buyer {question_id} {account}"));
+
+        self.buyers.insert((question_id, account.clone()), receipt);
+        self.question_buyers.insert(question_id, new_buyers);
+
+        self.add_liability(attached);
 
         q.fee_pool += attached;
         q.buyer_count += 1;
@@ -717,7 +752,7 @@ impl HiveCast {
 
     pub fn reveal(&mut self, question_id: u64, prob_bps: u16, salt: String) {
         let now = env::block_timestamp();
-        let account = env::signer_account_id();
+        let account = env::predecessor_account_id();
 
         let q = self
             .questions
@@ -910,7 +945,7 @@ impl HiveCast {
     // ------------------------------------------------------------------------
 
     pub fn claim_buyer_refund(&mut self, question_id: u64) {
-        let account = env::signer_account_id();
+        let account = env::predecessor_account_id();
 
         let q = self
             .questions
@@ -952,7 +987,7 @@ impl HiveCast {
     // ------------------------------------------------------------------------
 
     pub fn withdraw(&mut self, amount: U128) -> Promise {
-        let account = env::signer_account_id();
+        let account = env::predecessor_account_id();
         let amount = amount.0;
         require!(amount > 0, "Amount must be positive");
 
@@ -977,15 +1012,29 @@ impl HiveCast {
             amount,
             status: WithdrawalStatus::Pending,
         };
-        self.pending_withdrawals.insert(nonce, wd);
 
-        let mut list = self
+        // Precise storage admission: pending-withdrawal record + the growth of
+        // the per-account withdrawal index. No new liability (the funds are
+        // already in custody as claimable).
+        let key_bytes = borsh::to_vec(&nonce).expect("wd key ser").len() as u64;
+        let value_bytes = borsh::to_vec(&wd).expect("wd value ser").len() as u64;
+        let mut additional = key_bytes + value_bytes + 2 * RECORD_OVERHEAD;
+
+        let old_list = self
             .account_withdrawals
             .get(&account)
             .cloned()
             .unwrap_or_default();
-        list.push(nonce);
-        self.account_withdrawals.insert(account.clone(), list);
+        let old_idx_bytes = borsh::to_vec(&old_list).expect("idx ser").len() as u64;
+        let mut new_list = old_list;
+        new_list.push(nonce);
+        let new_idx_bytes = borsh::to_vec(&new_list).expect("idx ser").len() as u64;
+        additional += new_idx_bytes.saturating_sub(old_idx_bytes);
+
+        self.ensure_storage_growth(additional, 0, &format!("withdrawal {nonce}"));
+
+        self.pending_withdrawals.insert(nonce, wd);
+        self.account_withdrawals.insert(account.clone(), new_list);
 
         emit(
             "withdrawal_requested",
@@ -1028,6 +1077,8 @@ impl HiveCast {
             wd.status = WithdrawalStatus::Delivered;
             bal.pending -= wd.amount;
             bal.received += wd.amount;
+            // Funds actually left the contract: release the liability.
+            self.sub_liability(wd.amount);
             emit(
                 "withdrawal_delivered",
                 &WithdrawalDeliveredEvent {
@@ -1040,6 +1091,7 @@ impl HiveCast {
             wd.status = WithdrawalStatus::Restored;
             bal.pending -= wd.amount;
             bal.claimable += wd.amount;
+            // Funds stay in custody: liability unchanged.
             emit(
                 "withdrawal_restored",
                 &WithdrawalRestoredEvent {
@@ -1266,19 +1318,53 @@ impl HiveCast {
         self.balances.insert(account, bal);
     }
 
+    fn add_liability(&mut self, amount: u128) {
+        let v = self
+            .total_liabilities
+            .get()
+            .checked_add(amount)
+            .expect("liability overflow");
+        self.total_liabilities.set(v);
+    }
+
+    fn sub_liability(&mut self, amount: u128) {
+        let v = self
+            .total_liabilities
+            .get()
+            .checked_sub(amount)
+            .expect("liability underflow");
+        self.total_liabilities.set(v);
+    }
+
     /// Reject new state growth when the operator's storage sponsorship is
-    /// insufficient. `estimated_bytes` is a conservative upper bound on the
-    /// key+value bytes this operation will add; the protocol's own storage
-    /// check remains the ultimate backstop.
-    fn ensure_storage_growth(&self, estimated_bytes: u64, label: &str) {
+    /// insufficient.
+    ///
+    /// Available sponsorship is `account_balance - total_liabilities`: user
+    /// funds (active escrow stake/fee, claimable entitlements, pending
+    /// transfers) may never subsidize new state. `incoming_liability` is the
+    /// yoctoNEAR this call is taking into custody (stake or fee) — it must be
+    /// added to liabilities *before* the admission check so a deposit cannot
+    /// be counted as free operator sponsorship. `additional_bytes` is the exact
+    /// additional key+value bytes (with record overhead) the operation writes,
+    /// computed from Borsh-serialized sizes at the call site.
+    fn ensure_storage_growth(&self, additional_bytes: u64, incoming_liability: u128, label: &str) {
         let used = env::storage_usage();
-        let projected = used.checked_add(estimated_bytes).expect("storage growth overflow");
+        let projected = used
+            .checked_add(additional_bytes)
+            .expect("storage growth overflow");
         let required = (projected as u128)
             .checked_mul(STORAGE_BYTE_COST)
             .expect("storage cost overflow");
+        // `account_balance()` already includes the attached deposit.
         let balance = env::account_balance().as_yoctonear();
-        let attached = env::attached_deposit().as_yoctonear();
-        let sponsor = balance.checked_sub(attached).expect("balance underflow");
+        let liabilities = self
+            .total_liabilities
+            .get()
+            .checked_add(incoming_liability)
+            .expect("liability overflow");
+        let sponsor = balance
+            .checked_sub(liabilities)
+            .expect("balance below liabilities");
         require!(
             sponsor >= required,
             format!("Insufficient storage sponsorship for {label}")
@@ -1339,6 +1425,17 @@ mod tests {
     fn init() -> HiveCast {
         testing_env!(ctx(OP, OP, 0, 0));
         HiveCast::new(OP.parse().unwrap())
+    }
+
+    fn ctx_bal(signer: &str, predecessor: &str, deposit: u128, balance: u128, ts: u64) -> VMContext {
+        VMContextBuilder::new()
+            .current_account_id(CONTRACT.parse().unwrap())
+            .signer_account_id(signer.parse().unwrap())
+            .predecessor_account_id(predecessor.parse().unwrap())
+            .attached_deposit(NearToken::from_yoctonear(deposit))
+            .block_timestamp(ts)
+            .account_balance(NearToken::from_yoctonear(balance))
+            .build()
     }
 
     fn spec() -> QuestionSpec {
@@ -1911,5 +2008,24 @@ mod tests {
         let acct = "p64.testnet";
         testing_env!(ctx(acct, acct, 1, 1_500));
         c.commit(qid, commit_hex(qid, acct, 1, 5_000, "s"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Insufficient storage sponsorship")]
+    fn prior_liability_blocks_new_commit_without_reserve() {
+        let mut c = init();
+        testing_env!(ctx(OP, OP, 0, 0));
+        let qid = c.create_question(spec());
+
+        // Alice takes 100 yocto of stake into custody (a user liability).
+        testing_env!(ctx("alice.testnet", "alice.testnet", 100, 1_500));
+        c.commit(qid, commit_hex(qid, "alice.testnet", 100, 5_000, "a"));
+
+        // Operator's balance is now exactly the 100 yocto owed to Alice plus
+        // 1 yocto — no free sponsor reserve beyond the existing liability.
+        // Bob's new commitment must be rejected rather than spending Alice's
+        // funds on storage.
+        testing_env!(ctx_bal("bob.testnet", "bob.testnet", 1, 101, 1_500));
+        c.commit(qid, commit_hex(qid, "bob.testnet", 1, 5_000, "b"));
     }
 }
