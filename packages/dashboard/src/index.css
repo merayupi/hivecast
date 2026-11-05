@@ -136,12 +136,17 @@
     display: grid;
     grid-template-columns: repeat(6, 1fr);
     align-items: start;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    gap: 0;
   }
   .phase-node {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 0.375rem;
+    padding-right: 0.5rem;
   }
   .phase-detent {
     width: 100%;
@@ -162,27 +167,28 @@
     border: 1px solid var(--color-bone-100);
     outline: 1px solid var(--color-ink-900);
   }
-  .phase-detent.is-null { background: transparent; }
   .phase-label {
     color: var(--color-ink-500);
-    white-space: nowrap;
+    white-space: normal;
+    line-height: 1.25;
   }
-  .phase-times {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
+  .phase-time {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 0.62rem;
     color: var(--color-ink-500);
+    max-width: 100%;
   }
-  .phase-time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .phase-time.is-null { color: var(--color-ink-300); }
   .phase-now {
     display: flex;
     align-items: center;
     gap: 0.75rem;
     margin: 0;
+    flex-wrap: wrap;
   }
   @media (max-width: 720px) {
-    .phase-track, .phase-times { grid-template-columns: repeat(3, 1fr); row-gap: 0.5rem; }
+    .phase-track { grid-template-columns: repeat(3, 1fr); row-gap: 0.5rem; }
   }
 
   /* ---- Shell / layout ---- */
