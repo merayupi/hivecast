@@ -498,3 +498,417 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Real native scenarios required by #4 acceptance-5 and #7 acceptance-1:
+// zero-valid-reveal fee refund and an actual node-level transfer failure
+// (pending → restored, private callback denied, safe retry delivery).
+// ---------------------------------------------------------------------------
+
+const STAKE_10: u128 = 10_000_000_000_000_000_000_000_000; // 10 NEAR
+const STAKE_20: u128 = 20_000_000_000_000_000_000_000_000; // 20 NEAR
+const FEE_5: u128 = 5_000_000_000_000_000_000_000_000; // 5 NEAR
+
+/// Drive a single-participant Round to settlement (stake 10, fee 5 → claimable
+/// 15 NEAR) and return the participant account and question id.
+async fn settle_single_participant(
+    worker: &Worker<Sandbox>,
+    contract: &Contract,
+    operator: &Account,
+    resolver: &Account,
+    buyer: &Account,
+) -> anyhow::Result<(Account, u64)> {
+    let participant = contract
+        .as_account()
+        .create_subaccount("solo")
+        .initial_balance(NearToken::from_near(100))
+        .transact()
+        .await?
+        .into_result()?;
+
+    let t0 = worker.view_block().await?.timestamp();
+    let open_time = t0 + 30 * NEAR_NS;
+    let close_time = t0 + 900 * NEAR_NS;
+    let obs_start = t0 + 960 * NEAR_NS;
+    let obs_end = t0 + 980 * NEAR_NS;
+    let resolve_deadline = t0 + 1300 * NEAR_NS;
+    let reveal_window = 900 * NEAR_NS;
+
+    let res = operator
+        .call(contract.id(), "create_question")
+        .args_json(spec_json(
+            resolver.id().as_str(),
+            open_time,
+            close_time,
+            obs_start,
+            obs_end,
+            resolve_deadline,
+            reveal_window,
+            FEE_5,
+            STAKE_10,
+        ))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "create_question failed: {res:?}");
+    let question_id: u64 = res.json()?;
+
+    advance_to(worker, open_time).await?;
+    let hash = commitment_hash(
+        contract.id().as_str(),
+        question_id,
+        participant.id().as_str(),
+        STAKE_10,
+        5000,
+        "salt",
+    );
+    let res = participant
+        .call(contract.id(), "commit")
+        .args_json(serde_json::json!({ "question_id": question_id, "hash": hash }))
+        .deposit(NearToken::from_yoctonear(STAKE_10))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "commit failed: {res:?}");
+
+    advance_to(worker, close_time + 2 * NEAR_NS).await?;
+    let res = operator
+        .call(contract.id(), "publish_snapshot")
+        .args_json(serde_json::json!({ "question_id": question_id, "snapshot_id": "snap" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "publish_snapshot failed: {res:?}");
+    let res = buyer
+        .call(contract.id(), "buy_forecast")
+        .args_json(serde_json::json!({ "question_id": question_id }))
+        .deposit(NearToken::from_yoctonear(FEE_5))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "buy_forecast failed: {res:?}");
+
+    advance_to(worker, obs_end + 2 * NEAR_NS).await?;
+    let res = resolver
+        .call(contract.id(), "resolve")
+        .args_json(serde_json::json!({ "question_id": question_id, "outcome": true }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "resolve failed: {res:?}");
+
+    let res = participant
+        .call(contract.id(), "reveal")
+        .args_json(serde_json::json!({
+            "question_id": question_id,
+            "prob_bps": 5000,
+            "salt": "salt"
+        }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "reveal failed: {res:?}");
+
+    let resolved_at = worker.view_block().await?.timestamp();
+    advance_to(worker, resolved_at + reveal_window + 2 * NEAR_NS).await?;
+    let res = operator
+        .call(contract.id(), "settle")
+        .args_json(serde_json::json!({ "question_id": question_id }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "settle failed: {res:?}");
+
+    Ok((participant, question_id))
+}
+
+#[tokio::test]
+async fn test_zero_reveal_refunds_fee_and_stakes_natively() -> anyhow::Result<()> {
+    let (worker, contract, operator, resolver, buyer) = deploy().await?;
+
+    // Two agents, no reveal after a real resolve + full reveal deadline.
+    let a = contract
+        .as_account()
+        .create_subaccount("za")
+        .initial_balance(NearToken::from_near(100))
+        .transact()
+        .await?
+        .into_result()?;
+    let b = contract
+        .as_account()
+        .create_subaccount("zb")
+        .initial_balance(NearToken::from_near(100))
+        .transact()
+        .await?
+        .into_result()?;
+
+    let t0 = worker.view_block().await?.timestamp();
+    let open_time = t0 + 30 * NEAR_NS;
+    let close_time = t0 + 900 * NEAR_NS;
+    let obs_start = t0 + 960 * NEAR_NS;
+    let obs_end = t0 + 980 * NEAR_NS;
+    let resolve_deadline = t0 + 1300 * NEAR_NS;
+    let reveal_window = 900 * NEAR_NS;
+
+    let res = operator
+        .call(contract.id(), "create_question")
+        .args_json(spec_json(
+            resolver.id().as_str(),
+            open_time,
+            close_time,
+            obs_start,
+            obs_end,
+            resolve_deadline,
+            reveal_window,
+            FEE_5,
+            STAKE_10,
+        ))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "create_question failed: {res:?}");
+    let question_id: u64 = res.json()?;
+
+    advance_to(&worker, open_time).await?;
+    for (acct, stake) in [(&a, STAKE_10), (&b, STAKE_20)] {
+        let hash = commitment_hash(
+            contract.id().as_str(),
+            question_id,
+            acct.id().as_str(),
+            stake,
+            5000,
+            "salt",
+        );
+        let res = acct
+            .call(contract.id(), "commit")
+            .args_json(serde_json::json!({ "question_id": question_id, "hash": hash }))
+            .deposit(NearToken::from_yoctonear(stake))
+            .max_gas()
+            .transact()
+            .await?;
+        assert!(res.is_success(), "commit failed: {res:?}");
+    }
+
+    advance_to(&worker, close_time + 2 * NEAR_NS).await?;
+    let res = operator
+        .call(contract.id(), "publish_snapshot")
+        .args_json(serde_json::json!({ "question_id": question_id, "snapshot_id": "snap" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "publish_snapshot failed: {res:?}");
+    let res = buyer
+        .call(contract.id(), "buy_forecast")
+        .args_json(serde_json::json!({ "question_id": question_id }))
+        .deposit(NearToken::from_yoctonear(FEE_5))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "buy_forecast failed: {res:?}");
+
+    advance_to(&worker, obs_end + 2 * NEAR_NS).await?;
+    let res = resolver
+        .call(contract.id(), "resolve")
+        .args_json(serde_json::json!({ "question_id": question_id, "outcome": true }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "resolve failed: {res:?}");
+
+    // Deliberately NO reveal from either agent; wait the full reveal window.
+    let resolved_at = worker.view_block().await?.timestamp();
+    advance_to(&worker, resolved_at + reveal_window + 2 * NEAR_NS).await?;
+    let res = operator
+        .call(contract.id(), "settle")
+        .args_json(serde_json::json!({ "question_id": question_id }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "settle failed: {res:?}");
+
+    // Zero valid reveal: base returns original stakes, no fee to agents.
+    let a_bal: serde_json::Value = contract
+        .call("get_balance")
+        .args_json(serde_json::json!({ "account_id": a.id() }))
+        .view()
+        .await?
+        .json()?;
+    let b_bal: serde_json::Value = contract
+        .call("get_balance")
+        .args_json(serde_json::json!({ "account_id": b.id() }))
+        .view()
+        .await?
+        .json()?;
+    assert_eq!(a_bal["claimable"].as_str().unwrap(), "10000000000000000000000000");
+    assert_eq!(b_bal["claimable"].as_str().unwrap(), "20000000000000000000000000");
+
+    // Buyer claims their fee refund exactly once and receives the funds.
+    let res = buyer
+        .call(contract.id(), "claim_buyer_refund")
+        .args_json(serde_json::json!({ "question_id": question_id }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "claim_buyer_refund failed: {res:?}");
+
+    let buyer_before = buyer.view_account().await?.balance;
+    let res = buyer
+        .call(contract.id(), "withdraw")
+        .args_json(serde_json::json!({ "amount": "5000000000000000000000000" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "buyer withdraw failed: {res:?}");
+    let buyer_after = buyer.view_account().await?.balance;
+    assert!(
+        buyer_after.as_yoctonear() > buyer_before.as_yoctonear(),
+        "buyer balance did not increase: before={buyer_before:?} after={buyer_after:?}"
+    );
+
+    // Each agent withdraws their original stake exactly (native delivery).
+    for (acct, expect) in [(&a, "10000000000000000000000000"), (&b, "20000000000000000000000000")] {
+        let before = acct.view_account().await?.balance;
+        let res = acct
+            .call(contract.id(), "withdraw")
+            .args_json(serde_json::json!({ "amount": expect }))
+            .max_gas()
+            .transact()
+            .await?;
+        assert!(res.is_success(), "agent withdraw failed: {res:?}");
+        let after = acct.view_account().await?.balance;
+        assert!(
+            after.as_yoctonear() > before.as_yoctonear(),
+            "agent balance did not increase: before={before:?} after={after:?}"
+        );
+        let bal: serde_json::Value = contract
+            .call("get_balance")
+            .args_json(serde_json::json!({ "account_id": acct.id() }))
+            .view()
+            .await?
+            .json()?;
+        assert_eq!(bal["received"].as_str().unwrap(), expect);
+    }
+
+    // Second refund claim must be rejected (exactly-once).
+    let res = buyer
+        .call(contract.id(), "claim_buyer_refund")
+        .args_json(serde_json::json!({ "question_id": question_id }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_failure(), "second claim_buyer_refund must fail: {res:?}");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_withdraw_transfer_failure_restores_and_retry_delivers() -> anyhow::Result<()> {
+    let (worker, contract, operator, resolver, buyer) = deploy().await?;
+    let (participant, _qid) =
+        settle_single_participant(&worker, &contract, &operator, &resolver, &buyer).await?;
+
+    // Claimable is 15 NEAR after settlement.
+    let bal: serde_json::Value = contract
+        .call("get_balance")
+        .args_json(serde_json::json!({ "account_id": participant.id() }))
+        .view()
+        .await?
+        .json()?;
+    assert_eq!(bal["claimable"].as_str().unwrap(), "15000000000000000000000000");
+
+    let pid = participant.id().clone();
+
+    // Submit the withdraw asynchronously (broadcast_tx_async: accepted but the
+    // transfer receipt is deferred to a later block), then delete the recipient
+    // account so the node-level Transfer action fails with AccountDoesNotExist.
+    let wd_status = participant
+        .call(contract.id(), "withdraw")
+        .args_json(serde_json::json!({ "amount": "15000000000000000000000000" }))
+        .max_gas()
+        .transact_async()
+        .await?;
+
+    // Delete the participant (its leftover balance goes to the buyer). The
+    // contract still holds the 15 NEAR entitlement keyed by the account id.
+    let del = participant.delete_account(buyer.id()).await?;
+    assert!(del.is_success(), "delete_account failed: {del:?}");
+
+    // Wait for the withdraw's final outcome (transfer + private callback).
+    let outcome = wd_status.await?;
+    eprintln!("WITHDRAW_FAILURE_OUTCOME={outcome:?}");
+
+    // Ledger: pending restored to claimable, nothing received.
+    let bal: serde_json::Value = contract
+        .call("get_balance")
+        .args_json(serde_json::json!({ "account_id": pid }))
+        .view()
+        .await?
+        .json()?;
+    assert_eq!(bal["claimable"].as_str().unwrap(), "15000000000000000000000000");
+    assert_eq!(bal["pending"].as_str().unwrap(), "0");
+    assert_eq!(bal["received"].as_str().unwrap(), "0");
+
+    // Safe retry: recreate the same-named account and withdraw again; the
+    // restored entitlement delivers exactly once (no double spend).
+    let participant2 = contract
+        .as_account()
+        .create_subaccount("solo")
+        .initial_balance(NearToken::from_near(50))
+        .transact()
+        .await?
+        .into_result()?;
+
+    let before = participant2.view_account().await?.balance;
+    let res = participant2
+        .call(contract.id(), "withdraw")
+        .args_json(serde_json::json!({ "amount": "15000000000000000000000000" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "retry withdraw failed: {res:?}");
+
+    let after = participant2.view_account().await?.balance;
+    assert!(
+        after.as_yoctonear() > before.as_yoctonear(),
+        "retry recipient balance did not increase: before={before:?} after={after:?}"
+    );
+
+    let bal: serde_json::Value = contract
+        .call("get_balance")
+        .args_json(serde_json::json!({ "account_id": participant2.id() }))
+        .view()
+        .await?
+        .json()?;
+    assert_eq!(bal["claimable"].as_str().unwrap(), "0");
+    assert_eq!(bal["received"].as_str().unwrap(), "15000000000000000000000000");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_private_callback_denied_natively() -> anyhow::Result<()> {
+    let (worker, contract, operator, resolver, buyer) = deploy().await?;
+    let (participant, _qid) =
+        settle_single_participant(&worker, &contract, &operator, &resolver, &buyer).await?;
+
+    // Produce a real pending-withdrawal nonce (0) via a successful withdraw.
+    let res = participant
+        .call(contract.id(), "withdraw")
+        .args_json(serde_json::json!({ "amount": "15000000000000000000000000" }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "withdraw failed: {res:?}");
+
+    // A non-contract account must not be able to drive the private callback,
+    // even for an existing nonce. The #[private] guard rejects at the node.
+    let res = buyer
+        .call(contract.id(), "on_withdraw_callback")
+        .args_json(serde_json::json!({ "nonce": 0 }))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_failure(), "private callback must be denied: {res:?}");
+
+    Ok(())
+}
