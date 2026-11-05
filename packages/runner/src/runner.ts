@@ -291,6 +291,18 @@ export class Runner {
         this.store.deleteSignedTx(dedupKey);
         return { kind, questionId, accountId, sent: true, reason: 'rebroadcast-sent', error: null };
       }
+      if (outcome.nonceStale) {
+        // Definitive InvalidNonceError: the stale-nonce tx was NOT included.
+        // Reconcile the postcondition first (the original intent may already
+        // have landed via a lost response), then evict the nonce cache and
+        // re-prepare a FRESH signed tx for the SAME intent.
+        if (await verify()) {
+          this.store.markConfirmed(dedupKey, signed.txHash);
+          this.store.deleteSignedTx(dedupKey);
+          return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
+        }
+        return this.prepareFreshAndBroadcast(dedupKey, kind, questionId, accountId, action);
+      }
       if (outcome.status === 'failure') {
         // Definitively rejected/failed: it did not apply, so a fresh attempt is
         // safe after this is cleared.
@@ -313,7 +325,22 @@ export class Runner {
     }
 
     // Fresh attempt: prepare the signed tx, persist it, THEN broadcast.
+    return this.prepareFreshAndBroadcast(dedupKey, kind, questionId, accountId, action);
+  }
+
+  /** Prepare a FRESH signed tx (evicting any stale nonce cache), persist it,
+   * then broadcast. Reconciles the postcondition first on a stale nonce. */
+  private async prepareFreshAndBroadcast(
+    dedupKey: string,
+    kind: JournalKind,
+    questionId: number | null,
+    accountId: string | null,
+    action: () => { methodName: string; args: Record<string, unknown>; signer: string; deposit: bigint; gas?: bigint },
+  ): Promise<StepResult> {
     const a = action();
+    // Evict the account's nonce cache so prepareCall re-fetches the real nonce
+    // (a previous stale-nonce rejection left the cache wrong).
+    this.chain.evictAccountNonceCache(a.signer);
     const prepared = await this.chain.prepareCall(a.methodName, a.args, a.signer, a.deposit, a.gas);
     this.store.saveSignedTx(dedupKey, prepared.signedBytesBase64, prepared.txHash, prepared.nonce);
     this.store.markSubmitted(dedupKey, prepared.txHash);
@@ -322,6 +349,12 @@ export class Runner {
       this.store.markConfirmed(dedupKey, outcome.txHash ?? prepared.txHash);
       this.store.deleteSignedTx(dedupKey);
       return { kind, questionId, accountId, sent: true, reason: 'sent', error: null };
+    }
+    if (outcome.nonceStale) {
+      // Still stale after eviction: a concurrent signer keeps racing. Keep the
+      // freshly prepared bytes and let the next tick reconcile/re-prepare.
+      this.store.markSubmitted(dedupKey, prepared.txHash);
+      return { kind, questionId, accountId, sent: false, reason: 'nonce-stale-retry', error: outcome.error };
     }
     if (outcome.status === 'failure') {
       this.store.markFailed(dedupKey, outcome.error ?? 'unknown error');
@@ -812,6 +845,11 @@ export class Runner {
         this.store.saveQuestion(local, params.targetKey);
         return { questionId, alreadyExists: false, error: null };
       }
+      if (outcome.nonceStale) {
+        // Definitive stale-nonce rejection: reconcile the on-chain postcondition
+        // first, then re-prepare a FRESH signed create_question (same spec).
+        return this.reconcileOrRecreate(dedupKey, params, participants);
+      }
       if (outcome.status === 'failure') {
         this.store.markFailed(dedupKey, outcome.error ?? 'unknown error');
         this.store.deleteSignedTx(dedupKey);
@@ -822,6 +860,31 @@ export class Runner {
     }
 
     // Fresh attempt: prepare + persist the signed tx, then broadcast.
+    return this.reconcileOrRecreate(dedupKey, params, participants);
+  }
+
+  /** Prepare + persist + broadcast a create_question, handling stale-nonce
+   * rejection by reconciling the on-chain postcondition and re-preparing. */
+  private async reconcileOrRecreate(
+    dedupKey: string,
+    params: CreateQuestionSpec,
+    participants: { agentId: AgentId; accountId: string }[],
+  ): Promise<{ questionId: number | null; alreadyExists: boolean; error: string | null }> {
+    // A create_question is context-bound to targetKey + full spec; check whether
+    // it already landed before (re)signing anything.
+    const all = await this.listAllChainQuestions();
+    const onChain = all.find((q) => this.matchesSpec(q, params));
+    if (onChain) {
+      this.store.markConfirmed(dedupKey);
+      this.store.deleteSignedTx(dedupKey);
+      const local = this.toLocalQuestion(onChain.question_id, params, participants);
+      this.store.saveQuestion(local, params.targetKey);
+      return { questionId: onChain.question_id, alreadyExists: true, error: null };
+    }
+
+    // Evict any stale nonce cache, then prepare a FRESH signed tx for the SAME
+    // spec and persist it BEFORE broadcast.
+    this.chain.evictAccountNonceCache(this.config.operatorId);
     const prepared = await this.chain.prepareCall(
       'create_question',
       { spec: {
@@ -853,6 +916,10 @@ export class Runner {
       const local = this.toLocalQuestion(questionId, params, participants);
       this.store.saveQuestion(local, params.targetKey);
       return { questionId, alreadyExists: false, error: null };
+    }
+    if (outcome.nonceStale) {
+      // Still stale: keep the freshly prepared bytes; the next tick reconciles.
+      return { questionId: null, alreadyExists: false, error: 'create_question nonce stale; will retry same intent' };
     }
     if (outcome.status === 'failure') {
       this.store.markFailed(dedupKey, outcome.error ?? 'create_question failed');
