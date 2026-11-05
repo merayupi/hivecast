@@ -1,0 +1,14 @@
+{
+  "name": "@hivecast/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HiveCast shared core: strategy interface, seeded RNG, exact BigInt decimal accounting.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  }
+}
