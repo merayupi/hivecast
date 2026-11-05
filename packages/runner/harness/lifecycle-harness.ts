@@ -105,25 +105,34 @@ async function main(): Promise<void> {
   const questionId = created.questionId!;
   process.stdout.write(`[harness] created question_id=${questionId} already_exists=${created.alreadyExists}\n`);
 
-  // Poll until terminal + withdrawals drained.
+  // Poll until terminal + withdrawals drained. Each iteration is isolated so a
+  // transient RPC outage is reported and retried, never treated as fatal: the
+  // journal/signed-tx state is already durably persisted before any broadcast,
+  // so pausing here preserves all pending work.
   const started = Date.now();
   const MAX_MS = domain === 'price' ? 3 * 3_600_000 : 60 * 3_600_000;
   while (Date.now() - started < MAX_MS) {
-    const report = await runner.tick();
-    for (const s of report.steps) {
-      if (s.sent) {
-        process.stdout.write(`[harness] ${s.kind} q=${s.questionId} acct=${s.accountId ?? '-'} sent\n`);
-      } else if (s.error) {
-        process.stdout.write(`[harness] ${s.kind} q=${s.questionId} acct=${s.accountId ?? '-'} NOT-SENT ${s.reason} err=${s.error}\n`);
+    try {
+      const report = await runner.tick();
+      for (const s of report.steps) {
+        if (s.sent) {
+          process.stdout.write(`[harness] ${s.kind} q=${s.questionId} acct=${s.accountId ?? '-'} sent\n`);
+        } else if (s.error) {
+          process.stdout.write(`[harness] ${s.kind} q=${s.questionId} acct=${s.accountId ?? '-'} NOT-SENT ${s.reason} err=${s.error}\n`);
+        }
       }
-    }
-    const view = await chain.getQuestion(questionId);
-    const terminal = view?.phase === 'settled' || view?.phase === 'cancelled';
-    if (terminal) {
-      process.stdout.write(`[harness] terminal phase=${view!.phase}\n`);
-      // Drain withdrawals once more.
-      await runner.tick();
-      break;
+      const view = await chain.getQuestion(questionId);
+      const terminal = view?.phase === 'settled' || view?.phase === 'cancelled';
+      if (terminal) {
+        process.stdout.write(`[harness] terminal phase=${view!.phase}\n`);
+        // Drain withdrawals once more.
+        await runner.tick();
+        break;
+      }
+    } catch (err) {
+      // RPC unavailable / transient failure: report, keep the loop alive, and
+      // retry next poll. Pending journal/signed-tx work is preserved on disk.
+      process.stderr.write(`[harness] non-fatal error (will retry): ${(err as Error).message}\n`);
     }
     await sleep(config.pollIntervalMs);
   }
