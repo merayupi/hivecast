@@ -349,6 +349,9 @@ class SandboxClockChain implements ChainClient {
   broadcastCall(b: string): Promise<CallOutcome> {
     return this.inner.broadcastCall(b);
   }
+  evictAccountNonceCache(accountId: string): void {
+    this.inner.evictAccountNonceCache(accountId);
+  }
   createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome> {
     return this.inner.createQuestion(spec, signer);
   }
