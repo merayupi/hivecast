@@ -318,12 +318,6 @@ async function callFunction(
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Block-time adapter (spec-allowed): delegate everything, override nowNs().
-// The mechanical forwarding lives in the shared `SandboxChainBase`.
-// ---------------------------------------------------------------------------
-class SandboxClockChain extends SandboxChainBase {}
-
 function buildAgentAccounts(accts: Map<string, string>): Record<AgentId, string> {
   return {
     meteo: accts.get('meteo')!,
@@ -483,7 +477,7 @@ async function main(): Promise<void> {
 
       const config = buildConfig();
       const innerChain = new NearChainClient(config);
-      const chain = new SandboxClockChain(innerChain, await currentBlockNs(sb.rpcUrl));
+      const chain = new SandboxChainBase(innerChain, await currentBlockNs(sb.rpcUrl));
       const store = new Store(config.databasePath, config.networkId, config.contractId);
 
       const sourceJson = JSON.stringify({
@@ -626,7 +620,7 @@ async function main(): Promise<void> {
 
       const config = buildConfig();
       const innerChain = new NearChainClient(config);
-      const chain = new SandboxClockChain(innerChain, await currentBlockNs(sb.rpcUrl));
+      const chain = new SandboxChainBase(innerChain, await currentBlockNs(sb.rpcUrl));
       const store = new Store(config.databasePath, config.networkId, config.contractId);
       const sourceJson = JSON.stringify({ kind: 'price', instrument: 'NEARUSDT', interval: '1h' });
 
