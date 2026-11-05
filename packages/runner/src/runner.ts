@@ -101,7 +101,12 @@ export class LiveSourceProvider implements SourceProvider {
     const { forecastPrecipMm, evidence } = await fetchWeatherForecast(bases, spec, targetDate);
     const historyPrecipMm: string[] = [];
     const missing: string[] = [];
-    for (let i = 1; i <= WEATHER_HISTORY_DAYS; i++) {
+    // History = past WIB days whose observation window FULLY ended before the
+    // commitment cutoff. The most recent completed day is the day before the
+    // target day's predecessor (target D, cutoff D-1 23:55 WIB, so D-1 has not
+    // ended yet); therefore start at i=2 (D-2 and older), never the still-open
+    // local day.
+    for (let i = 2; i <= WEATHER_HISTORY_DAYS + 1; i++) {
       const d = new Date(nsToMs(q.observationStartNs) - i * 86_400_000);
       const date = wibDateOfUtcMs(d.getTime());
       try {
@@ -115,7 +120,7 @@ export class LiveSourceProvider implements SourceProvider {
     historyPrecipMm.reverse();
     return {
       inputs: { kind: 'weather', forecastPrecipMm, historyPrecipMm },
-      disclosure: JSON.stringify({ forecast: evidence, missingHistoryDays: missing }),
+      disclosure: JSON.stringify({ forecast: evidence, missingHistoryDays: missing, excludedIncompleteDay: true }),
     };
   }
 
@@ -238,11 +243,7 @@ export class Runner {
   // Lifecycle steps
   // -------------------------------------------------------------------------
 
-  private async commitAgent(q: LocalQuestion, agentId: AgentId, accountId: string, inputs: StrategyInputs): Promise<StepResult> {
-    const result = getStrategy(agentId)(this.strategyContext(q, agentId, inputs));
-    if (result.kind === 'abstain') {
-      return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: `abstain:${result.reason}`, error: null };
-    }
+  private async commitAgent(q: LocalQuestion, agentId: AgentId, accountId: string, inputs: StrategyInputs | null): Promise<StepResult> {
     const dedupKey = `commit:${q.questionId}:${accountId}`;
     const verify = async () => {
       const c = await this.chain.getCommitment(q.questionId, accountId);
@@ -252,6 +253,14 @@ export class Runner {
     // Reuse the persisted forecast/stake BEFORE rerunning strategy or sizing.
     let forecast = this.store.getForecast(q.questionId, accountId);
     if (!forecast) {
+      if (inputs === null) {
+        // No durable forecast and no available source: cannot commit now.
+        return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: 'inputs-unavailable', error: null };
+      }
+      const result = getStrategy(agentId)(this.strategyContext(q, agentId, inputs));
+      if (result.kind === 'abstain') {
+        return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: `abstain:${result.reason}`, error: null };
+      }
       const available = await this.availableForStake(accountId);
       const stake = available / STAKE_FLOOR_DENOM;
       if (stake < this.config.minStakeYocto) {
@@ -294,17 +303,32 @@ export class Runner {
   }
 
   private async commitPhase(q: LocalQuestion): Promise<StepResult[]> {
-    let inputsResult: StrategyInputResult;
-    try {
-      inputsResult = await this.source.strategyInputs(q);
-    } catch (err) {
-      return [{ kind: 'commit', questionId: q.questionId, accountId: null, sent: false, reason: 'inputs-unavailable', error: (err as Error).message }];
+    // Determine which participants still lack a durable forecast. Source is
+    // fetched only when at least one participant needs it, so durable forecasts
+    // remain sendable even if the external source is currently unavailable,
+    // and the 30-day weather history is not re-fetched every tick.
+    const missing: { agentId: AgentId; accountId: string }[] = [];
+    for (const p of q.participants) {
+      if (!this.store.getForecast(q.questionId, p.accountId)) missing.push(p);
     }
-    // Persist input evidence (disclosure of availability + missing history).
-    this.store.saveEvidence(q.questionId, 'input', inputsResult.disclosure, createHash('sha256').update(inputsResult.disclosure).digest('hex'));
+    let inputs: StrategyInputs | null = null;
+    if (missing.length > 0) {
+      try {
+        const inputsResult = await this.source.strategyInputs(q);
+        // Persist input evidence (disclosure of availability + missing history).
+        this.store.saveEvidence(q.questionId, 'input', inputsResult.disclosure, createHash('sha256').update(inputsResult.disclosure).digest('hex'));
+        inputs = inputsResult.inputs;
+      } catch (err) {
+        // If NO participant has a durable forecast, we cannot commit at all.
+        if (missing.length === q.participants.length) {
+          return [{ kind: 'commit', questionId: q.questionId, accountId: null, sent: false, reason: 'inputs-unavailable', error: (err as Error).message }];
+        }
+        // Otherwise proceed: participants with durable forecasts still send.
+      }
+    }
     const steps: StepResult[] = [];
     for (const p of q.participants) {
-      steps.push(await this.commitAgent(q, p.agentId, p.accountId, inputsResult.inputs));
+      steps.push(await this.commitAgent(q, p.agentId, p.accountId, inputs));
     }
     return steps;
   }

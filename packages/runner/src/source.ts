@@ -153,15 +153,16 @@ export async function fetchPriceResolution(
   if (!row) throw new Error(`no ${spec.instrument} candle at ${observationStartMs}`);
   const openTime = Number(row[0]);
   const closeTime = Number(row[6]);
-  // Validate the exact target hour AND that the candle is completed.
+  // Validate the exact target hour. Binance closeTime is the INCLUSIVE end of
+  // the interval (openTime + interval - 1 ms), not an exclusive boundary.
   if (openTime !== observationStartMs) {
     throw new Error(`candle openTime ${openTime} != target ${observationStartMs}`);
   }
-  if (closeTime !== openTime + MS_PER_HOUR) {
-    throw new Error(`candle closeTime ${closeTime} != ${openTime + MS_PER_HOUR} (not a complete ${spec.interval} candle)`);
+  if (closeTime !== openTime + MS_PER_HOUR - 1) {
+    throw new Error(`candle closeTime ${closeTime} != ${openTime + MS_PER_HOUR - 1} (not a complete ${spec.interval} candle)`);
   }
   if (closeTime >= nowMs) {
-    throw new Error(`target candle is not completed yet (closeTime ${closeTime} >= now ${nowMs})`);
+    throw new Error(`target candle is not completed yet (inclusive closeTime ${closeTime} >= now ${nowMs})`);
   }
   const candle: Candle = {
     openTime: String(row[0]),
