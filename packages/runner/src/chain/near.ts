@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Account, JsonRpcProvider, SignedTransaction, actions, baseEncode, teraToGas } from 'near-api-js';
 import type { KeyPairString } from 'near-api-js';
-import { AccountDoesNotExistError, AccessKeyDoesNotExistError } from 'near-api-js/rpc-errors';
+import { AccountDoesNotExistError, AccessKeyDoesNotExistError, UnknownTransactionError, InvalidTransactionError } from 'near-api-js/rpc-errors';
 import type { RunnerConfig } from '../config.js';
 import type {
   BalanceView,
@@ -86,6 +86,7 @@ export class NearChainClient implements ChainClient {
   private provider: JsonRpcProvider;
   private config: RunnerConfig;
   private accounts = new Map<string, Account>();
+  private storageCostPerByte: bigint | null = null;
 
   constructor(config: RunnerConfig) {
     this.contractId = config.contractId;
@@ -264,27 +265,45 @@ export class NearChainClient implements ChainClient {
     });
   }
 
+  /** Fetch + cache the protocol storage cost per byte (yoctoNEAR/byte). */
+  private async storageCost(): Promise<bigint> {
+    if (this.storageCostPerByte !== null) return this.storageCostPerByte;
+    const config = await this.provider.experimental_protocolConfig({ finality: 'final' });
+    const rc = (config as { runtime_config?: { storage_amount_per_byte?: string | number | bigint } }).runtime_config;
+    if (typeof rc !== 'object' || rc === null || rc.storage_amount_per_byte === undefined) {
+      throw new Error('protocol runtime_config.storage_amount_per_byte unavailable');
+    }
+    this.storageCostPerByte = BigInt(rc.storage_amount_per_byte);
+    return this.storageCostPerByte;
+  }
+
+  /** One keyless `view_account` + protocol cost, returning total + spendable. */
+  private async accountNativeState(accountId: string): Promise<{ total: bigint; available: bigint }> {
+    const [costPerByte, state] = await Promise.all([
+      this.storageCost(),
+      this.provider.viewAccount({ accountId, blockQuery: { finality: 'final' } }),
+    ]);
+    const usedOnStorage = BigInt(state.storage_usage) * costPerByte;
+    const locked = BigInt(state.locked);
+    const total = BigInt(state.amount) + locked;
+    const available = total - (locked > usedOnStorage ? locked : usedOnStorage);
+    return { total, available: available < 0n ? 0n : available };
+  }
+
   async viewAccountBalance(accountId: string): Promise<bigint> {
     const acc = this.account(accountId);
     const state = await acc.getState();
     return state.balance.available;
   }
 
-  /** Public keyless native balance: `amount` (total balance, incl. storage). */
+  /** Public keyless native total balance (`amount` + validator `locked`). */
   async viewNativeBalance(accountId: string): Promise<bigint> {
-    const state = await this.provider.viewAccount({ accountId, blockQuery: { finality: 'final' } });
-    return state.amount;
+    return (await this.accountNativeState(accountId)).total;
   }
 
-  /**
-   * Public keyless native SPENDABLE balance: `amount − locked` (storage-staked
-   * amount is excluded). This is the same figure the runner uses as its native
-   * base for stake sizing, before subtracting operational reserve/reservations.
-   */
+  /** Public keyless native spendable = total − max(validator locked, storage cost). */
   async viewNativeAvailable(accountId: string): Promise<bigint> {
-    const state = await this.provider.viewAccount({ accountId, blockQuery: { finality: 'final' } });
-    const available = state.amount - state.locked;
-    return available < 0n ? 0n : available;
+    return (await this.accountNativeState(accountId)).available;
   }
 
   async viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null> {
@@ -319,32 +338,69 @@ export class NearChainClient implements ChainClient {
 
   /** Finalized public transaction receipt projection (read-only, keyless). */
   async viewTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null> {
+    let res: unknown;
     try {
-      const res = await this.provider.viewTransactionStatus({ txHash, accountId });
-      if (typeof res !== 'object' || res === null || !('final_execution_status' in res)) {
+      res = await this.provider.viewTransactionStatus({ txHash, accountId });
+    } catch (err) {
+      // Definitive, queryable "does not exist" answers → null (404).
+      if (err instanceof UnknownTransactionError || err instanceof InvalidTransactionError) {
         return null;
       }
-      const finalExecutionStatus =
-        typeof res.final_execution_status === 'string' ? res.final_execution_status : '';
-      let tokensBurnt: string | null = null;
-      let successValue = false;
-      if ('transaction_outcome' in res && typeof res.transaction_outcome === 'object' && res.transaction_outcome !== null) {
-        const outcome = res.transaction_outcome.outcome;
-        if (typeof outcome === 'object' && outcome !== null) {
-          if ('tokens_burnt' in outcome && typeof outcome.tokens_burnt === 'string') {
-            tokensBurnt = outcome.tokens_burnt;
-          }
-          if ('status' in outcome && typeof outcome.status === 'object' && outcome.status !== null && 'SuccessValue' in outcome.status) {
-            successValue = true;
-          }
-        }
-      }
-      return { tx_hash: txHash, final_execution_status: finalExecutionStatus, success_value: successValue, tokens_burnt: tokensBurnt };
-    } catch {
-      // Unknown tx / transient unavailability: honest null (the endpoint maps
-      // this to a 404/coverage note, never a fabricated status).
+      // Transient RPC/chain availability → surface as unavailable (503), never
+      // conflated with "no such transaction".
+      throw new ChainUnavailableError(
+        `viewTxFinalStatus unavailable for ${txHash}: ${(err as Error).message}`,
+      );
+    }
+
+    if (typeof res !== 'object' || res === null || !('final_execution_status' in res)) {
+      // Not yet queryable (no final_execution_status) → honest null.
       return null;
     }
+
+    const finalExecutionStatus =
+      typeof res.final_execution_status === 'string' ? res.final_execution_status : '';
+
+    // Top-level `status` is the FINAL function-call result (SuccessValue or
+    // Failure). Only a FINAL transaction with a proven SuccessValue is success.
+    let successValue = false;
+    if (finalExecutionStatus === 'FINAL' && 'status' in res) {
+      const status = res.status;
+      if (typeof status === 'object' && status !== null && 'SuccessValue' in status) {
+        successValue = true;
+      }
+    }
+
+    // Gas = transaction_outcome.tokens_burnt + every receipt's tokens_burnt.
+    let tokensBurntSum = 0n;
+    const outcomes: unknown[] = [];
+    if ('transaction_outcome' in res && typeof res.transaction_outcome === 'object' && res.transaction_outcome !== null) {
+      const to = res.transaction_outcome;
+      if ('outcome' in to && typeof to.outcome === 'object' && to.outcome !== null) outcomes.push(to.outcome);
+    }
+    if ('receipts_outcome' in res && Array.isArray(res.receipts_outcome)) {
+      for (const ro of res.receipts_outcome) {
+        if (typeof ro === 'object' && ro !== null && 'outcome' in ro) outcomes.push(ro.outcome);
+      }
+    }
+    let tokensBurnt: string | null = null;
+    let anyFinalized = finalExecutionStatus === 'FINAL';
+    for (const o of outcomes) {
+      if (typeof o === 'object' && o !== null && 'tokens_burnt' in o) {
+        const tb = o.tokens_burnt;
+        if (typeof tb === 'string' || typeof tb === 'bigint' || typeof tb === 'number') {
+          tokensBurntSum += BigInt(tb);
+        }
+      }
+    }
+    if (anyFinalized) tokensBurnt = tokensBurntSum.toString();
+
+    return {
+      tx_hash: txHash,
+      final_execution_status: finalExecutionStatus,
+      success_value: successValue,
+      tokens_burnt: tokensBurnt,
+    };
   }
 
   createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome> {

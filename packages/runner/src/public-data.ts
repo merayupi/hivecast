@@ -263,23 +263,33 @@ export function formatNearYocto(yocto: string): string {
 
 export interface AccountEconomics {
   account_id: string;
-  /** Bankroll = native NEAR balance (keyless view_account; `null` when the RPC
-   * view is unavailable — never a fabricated zero). */
+  /** Bankroll = native total + claimable + locked round stake (`null` when the
+   * native view OR ledger balance view is unavailable — never a fabricated low). */
   bankroll: string | null;
-  /** Available = bankroll − locked stake (`null` when bankroll is unavailable). */
+  /** Available = native spendable − operational reserve − local reservations
+   * (`null` when the native view is unavailable). */
   available: string | null;
   /** Stake locked in non-terminal (open/closed/resolved) rounds. */
   locked_stake: string;
-  /** Finalized chain balance view (claimable/pending/received). */
-  claimable: string;
-  pending: string;
-  received: string;
+  /** Finalized chain balance view (claimable/pending/received); each is `null`
+   * when the ledger view is unobserved — never a fabricated zero. */
+  claimable: string | null;
+  pending: string | null;
+  received: string | null;
   /** Wagering P&L = Σ(basePayout − stake) over settled rounds (exact core settle). */
   wagering_pnl: string;
   /** Query-Fee income = Σ(feePayout) over settled rounds (exact core settle). */
   fee_income: string;
-  /** Actual observed gas cost = Σ(tokens_burnt) over confirmed journal txs. */
+  /** Observed gas subtotal = Σ(tokens_burnt) over finalized journal txs. */
   gas_burnt: string;
+  /**
+   * Gas observation coverage: 'complete' when every journal transaction for
+   * this account is finalized (confirmed/failed); 'partial' when some tx is
+   * still pending/submitted (its cost is not yet observable and is NOT
+   * included). An empty journal for an account means zero OBSERVED
+   * transactions (not a claim that no external gas ever existed).
+   */
+  gas_coverage: 'complete' | 'partial';
   /** Whether this account has participated in at least one Round. */
   participated: boolean;
 }
@@ -353,7 +363,9 @@ export async function computeAccountEconomics(
 
   // Gas: sum tokens_burnt over CONFIRMED and FAILED finalized journal
   // transactions per account (a failed finalized tx still spent gas). An empty
-  // observed journal means genuine zero gas — not an unknown.
+  // observed journal means zero OBSERVED transactions — the per-account
+  // `gas_coverage` field distinguishes complete observation from gaps, rather
+  // than claiming "no external gas ever existed".
   const finalizedByAccount = new Map<string, string[]>();
   for (const j of publicJournal) {
     if ((j.status !== 'confirmed' && j.status !== 'failed') || !j.txHash || !j.accountId) continue;
@@ -413,43 +425,58 @@ export async function computeAccountEconomics(
     if (b) a.balance = { claimable: b.claimable, pending: b.pending, received: b.received };
   }
 
-  const rows: AccountEconomics[] = [...map.values()]
-    .filter((a) => a.participated || a.balance !== null || a.nativeTotal !== null || gasByAccount.has(a.accountId))
-    .map((a) => {
+  const rows: AccountEconomics[] = [...map.values()].map((a) => {
       const claimable = a.balance ? BigInt(a.balance.claimable) : 0n;
       const pending = a.balance ? BigInt(a.balance.pending) : 0n;
       // Bankroll = native total + claimable + locked round stake. `received` is
-      // already inside native total (delivered), and `pending` is excluded when
-      // non-zero because an in-flight transfer may already be reflected in the
-      // native balance (callback lag) — reporting null is honest, not a double
-      // count. Null whenever the native view is unavailable.
+      // already inside native total (delivered). If the native total OR the
+      // ledger balance view is unobserved, report null (never a fabricated low).
+      const ledgerObserved = a.balance !== null;
       const bankroll =
-        a.nativeTotal === null
+        a.nativeTotal === null || !ledgerObserved
           ? null
           : pending > 0n
             ? null
             : (a.nativeTotal + claimable + a.lockedStake).toString();
-      // Available mirrors the runner's stake base: native spendable (amount −
-      // locked storage) minus the operational gas reserve. Private capital
-      // reservations are invisible to a keyless projection, so the true
-      // spendable may be lower; that is disclosed in the separation note.
-      const available =
-        a.nativeAvailable === null
-          ? null
-          : (a.nativeAvailable - operationalGasReserveYocto < 0n
-              ? 0n
-              : a.nativeAvailable - operationalGasReserveYocto).toString();
+      // Available mirrors the runner's stake base exactly: native spendable
+      // (amount − storage-locked) minus the operational gas reserve minus the
+      // account's durable local capital reservations. Reservation read failure
+      // propagates (never fabricates 0), and a missing native view is null.
+      let available: string | null;
+      if (a.nativeAvailable === null) {
+        available = null;
+      } else {
+        let reserved: bigint;
+        try {
+          reserved = source.getLocalReserved(a.accountId);
+        } catch (err) {
+          throw new Error(
+            `local reservation read failed for ${a.accountId}: ${(err as Error).message}`,
+          );
+        }
+        const v = a.nativeAvailable - operationalGasReserveYocto - reserved;
+        available = (v < 0n ? 0n : v).toString();
+      }
+
+      // Gas coverage: 'partial' when any journal tx for this account is not yet
+      // finalized (pending/submitted) — its true gas cost is not yet observable.
+      const hasUnfinalized = publicJournal.some(
+        (j) => j.accountId === a.accountId && j.status !== 'confirmed' && j.status !== 'failed',
+      );
+      const gasCoverage: 'complete' | 'partial' = hasUnfinalized ? 'partial' : 'complete';
+
       return {
         account_id: a.accountId,
         bankroll,
         available,
         locked_stake: a.lockedStake.toString(),
-        claimable: a.balance?.claimable ?? '0',
-        pending: a.balance?.pending ?? '0',
-        received: a.balance?.received ?? '0',
+        claimable: a.balance?.claimable ?? null,
+        pending: a.balance?.pending ?? null,
+        received: a.balance?.received ?? null,
         wagering_pnl: a.wageringPnl.toString(),
         fee_income: a.feeIncome.toString(),
         gas_burnt: (gasByAccount.get(a.accountId) ?? 0n).toString(),
+        gas_coverage: gasCoverage,
         participated: a.participated,
       };
     })
@@ -460,7 +487,7 @@ export async function computeAccountEconomics(
     contract_id: contractId,
     generated_at: new Date().toISOString(),
     separation_note:
-      'Wagering P&L, Query-Fee income, and gas are separate. Gas is an operational cost (paid by the Operator, summing tokens_burnt over confirmed and failed finalized transactions), never netted into a participant wagering profit or fee income. Available = native spendable (amount − storage-locked) minus the operational gas reserve; private capital reservations are invisible to this public projection, so the true spendable may be lower. Bankroll = native total + claimable + locked round stake, reported null while a withdrawal is in-flight (pending) because the transfer may already be reflected in the native balance.',
+      'Wagering P&L, Query-Fee income, and gas are separate. Gas is an operational cost (paid by the Operator, summing tokens_burnt over finalized transactions; an empty journal means zero observed transactions, not a claim that no external gas existed). Available = native spendable (amount − storage-locked) minus the operational gas reserve minus the account\'s durable local capital reservations. Bankroll = native total + claimable + locked round stake, reported null while a withdrawal is in-flight (pending) or when the native/ledger view is unobserved.',
     accounts: rows,
   };
 }

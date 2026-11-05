@@ -138,7 +138,7 @@ export class Runtime {
     this.store = store;
     this.runner = runner;
     this.access = new AccessAuth(config, chain, store, options?.clock);
-    this.publicReads = new PublicChainCache(chain);
+    this.publicReads = new PublicChainCache(chain, store);
   }
 
   getPublicConfig(): PublicConfig {

@@ -12,6 +12,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Runtime } from './runtime.js';
 import { AccessError, ACCESS_HTTP_STATUS } from './access/index.js';
+import { ChainUnavailableError } from './chain/index.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -308,6 +309,12 @@ export function createPublicService(runtime: Runtime): Server {
     } catch (err) {
       if (err instanceof AccessError) {
         return sendJson(res, ACCESS_HTTP_STATUS[err.code], { error: err.code, message: err.message }, runtime);
+      }
+      // Transient chain/RPC availability (e.g. the public RPC endpoint is down
+      // or rate-limited) must surface as 503, not a 500 "internal error", and
+      // never be conflated with a definitive "not found".
+      if (err instanceof ChainUnavailableError) {
+        return sendJson(res, 503, { error: 'chain_unavailable', message: (err as Error).message }, runtime);
       }
       return sendJson(res, 500, { error: 'internal_error', message: (err as Error).message }, runtime);
     }

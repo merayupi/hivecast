@@ -238,7 +238,87 @@ export class Store {
         phase TEXT NOT NULL,
         retired_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS public_terminal_rounds (
+        question_id INTEGER PRIMARY KEY,
+        phase TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        materialized_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS public_tx_gas (
+        tx_hash TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        final_status TEXT NOT NULL,
+        success_value INTEGER NOT NULL,
+        tokens_burnt TEXT NOT NULL,
+        cached_at INTEGER NOT NULL
+      );
     `);
+  }
+
+  // -------------------------------------------------------------------------
+  // Generic metadata (reuses the `meta` binding table)
+  // -------------------------------------------------------------------------
+
+  setMeta(key: string, value: string): void {
+    this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(key, value);
+  }
+
+  getMeta(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined;
+    return row ? row.value : null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Materialized terminal (settled/cancelled) rounds for the public read cache
+  // -------------------------------------------------------------------------
+
+  /** Persist an immutable terminal Round projection (question + commitments). */
+  savePublicTerminalRound(questionId: number, phase: 'settled' | 'cancelled', dataJson: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO public_terminal_rounds (question_id, phase, data_json, materialized_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(questionId, phase, dataJson, Date.now());
+  }
+
+  getPublicTerminalRound(questionId: number): { phase: string; dataJson: string } | null {
+    const row = this.db
+      .prepare('SELECT phase, data_json FROM public_terminal_rounds WHERE question_id = ?')
+      .get(questionId) as { phase: string; data_json: string } | undefined;
+    return row ? { phase: row.phase, dataJson: row.data_json } : null;
+  }
+
+  listPublicTerminalRounds(): { questionId: number; phase: string; dataJson: string }[] {
+    const rows = this.db
+      .prepare('SELECT question_id, phase, data_json FROM public_terminal_rounds ORDER BY question_id ASC')
+      .all() as { question_id: number; phase: string; data_json: string }[];
+    return rows.map((r) => ({ questionId: r.question_id, phase: r.phase, dataJson: r.data_json }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Finalized tx receipt gas cache (immutable once FINAL)
+  // -------------------------------------------------------------------------
+
+  savePublicTxGas(txHash: string, accountId: string, finalStatus: string, successValue: boolean, tokensBurnt: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO public_tx_gas (tx_hash, account_id, final_status, success_value, tokens_burnt, cached_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(txHash, accountId, finalStatus, successValue ? 1 : 0, tokensBurnt, Date.now());
+  }
+
+  getPublicTxGas(txHash: string): { accountId: string; finalStatus: string; successValue: boolean; tokensBurnt: string } | null {
+    const row = this.db
+      .prepare('SELECT account_id, final_status, success_value, tokens_burnt FROM public_tx_gas WHERE tx_hash = ?')
+      .get(txHash) as { account_id: string; final_status: string; success_value: number; tokens_burnt: string } | undefined;
+    if (!row) return null;
+    return { accountId: row.account_id, finalStatus: row.final_status, successValue: row.success_value === 1, tokensBurnt: row.tokens_burnt };
   }
 
   // -------------------------------------------------------------------------
