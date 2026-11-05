@@ -12,8 +12,21 @@ on:
       - '.github/workflows/hivecast-access-sandbox.yml'
 
 jobs:
-  access-sandbox:
+  sandbox:
     runs-on: ubuntu-latest
+    # Independent jobs so a failure in one proof does not skip the others;
+    # every assertion still fails its own job (and the overall workflow).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: access
+            script: sandbox:access
+          - name: recovery
+            script: sandbox:recovery
+          - name: source
+            script: sandbox:source
+    name: ${{ matrix.name }} proof
     steps:
       - uses: actions/checkout@v6
 
@@ -50,23 +63,9 @@ jobs:
           # set in GITHUB_ENV; shell $HOME is /home/runner).
           echo "NEAR_SANDBOX_BIN_PATH=$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox" >> "$GITHUB_ENV"
 
-      - name: Run real near-sandbox Forecast Access proof
+      - name: Run real near-sandbox ${{ matrix.name }} proof
         working-directory: packages/runner
         env:
           HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
           NEAR_SANDBOX_BIN_PATH: ${{ env.NEAR_SANDBOX_BIN_PATH }}
-        run: npm run sandbox:access
-
-      - name: Run real near-sandbox Runner restart/recovery proof
-        working-directory: packages/runner
-        env:
-          HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
-          NEAR_SANDBOX_BIN_PATH: ${{ env.NEAR_SANDBOX_BIN_PATH }}
-        run: npm run sandbox:recovery
-
-      - name: Run real near-sandbox source-boundary resolution proof
-        working-directory: packages/runner
-        env:
-          HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
-          NEAR_SANDBOX_BIN_PATH: ${{ env.NEAR_SANDBOX_BIN_PATH }}
-        run: npm run sandbox:source
+        run: npm run ${{ matrix.script }}
