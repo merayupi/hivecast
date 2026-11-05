@@ -165,7 +165,7 @@ function makeFakeChain(opts: FakeChainOptions = {}): ChainClient {
   const question = opts.question ?? ((qid: number) => questionView(qid));
 
   const emptyBalance: BalanceView = { account_id: '', claimable: '0', pending: '0', received: '0' };
-  const out: CallOutcome = { txHash: null, success: false, result: null, error: 'not-used' };
+  const out: CallOutcome = { txHash: null, success: false, result: null, error: 'not-used', status: 'failure' };
 
   return {
     contractId: CONTRACT,
@@ -184,6 +184,8 @@ function makeFakeChain(opts: FakeChainOptions = {}): ChainClient {
     listPendingWithdrawals: async () => [],
     viewAccountBalance: async () => 0n,
     viewAccessKeyPermission: async (accountId, publicKey) => permission(accountId, publicKey),
+    prepareCall: async () => ({ signedBytesBase64: '', txHash: '', nonce: '0' }),
+    broadcastCall: async () => out,
     createQuestion: async (_spec: QuestionSpecArgs) => out,
     commit: async () => out,
     publishSnapshot: async () => out,
