@@ -56,3 +56,17 @@ jobs:
           HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
           NEAR_SANDBOX_BIN_PATH: ${{ env.NEAR_SANDBOX_BIN_PATH }}
         run: npm run sandbox:access
+
+      - name: Run real near-sandbox Runner restart/recovery proof
+        working-directory: packages/runner
+        env:
+          HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
+          NEAR_SANDBOX_BIN_PATH: ${{ env.NEAR_SANDBOX_BIN_PATH }}
+        run: npm run sandbox:recovery
+
+      - name: Run real near-sandbox source-boundary resolution proof
+        working-directory: packages/runner
+        env:
+          HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
+          NEAR_SANDBOX_BIN_PATH: ${{ env.NEAR_SANDBOX_BIN_PATH }}
+        run: npm run sandbox:source

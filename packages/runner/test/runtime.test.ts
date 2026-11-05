@@ -29,9 +29,9 @@ import { Store } from '../src/store.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.resolve(HERE, '..', 'src', 'cli.ts');
 const CONTRACT = process.env.HIVECAST_RUNNER_CONTRACT ?? 'hivecast-market-6c4d.testnet';
-// The public rpc.testnet.near.org endpoint is retired (HTTP 429). Local-only
-// CLI/HTTP tests use a placeholder URL they never reach; the real RPC seam test
-// is skipped unless a verified endpoint is supplied via HIVECAST_RUNNER_RPC.
+// Local CLI/HTTP tests use a placeholder URL they never reach. The real RPC
+// seam test is skipped unless a verified endpoint is supplied via
+// HIVECAST_RUNNER_RPC (e.g. https://rpc.testnet.fastnear.com).
 const RPC = process.env.HIVECAST_RUNNER_RPC ?? 'https://unused.invalid';
 
 function configJson(dbPath: string): string {
@@ -96,6 +96,7 @@ function buildConfig(dbPath: string): RunnerConfig {
     kudusLongitude: '110.8397',
     kudusTimezone: 'Asia/Jakarta',
     operationalGasReserveYocto: 0n,
+    rpcTimeoutMs: 15_000,
     http: { enabled: false, host: '127.0.0.1', port: 8787 },
     access: {
       sessionTtlMs: 86_400_000,

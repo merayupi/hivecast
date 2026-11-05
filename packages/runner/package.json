@@ -15,7 +15,9 @@
     "service": "tsx src/service-entry.ts",
     "harness:testnet": "tsx harness/lifecycle-harness.ts",
     "smoke:auth": "tsx harness/auth-smoke.ts",
-    "sandbox:access": "tsx harness/access-sandbox.ts"
+    "sandbox:access": "tsx harness/access-sandbox.ts",
+    "sandbox:recovery": "tsx harness/runner-recovery-sandbox.ts",
+    "sandbox:source": "tsx harness/source-boundary-sandbox.ts"
   },
   "dependencies": {
     "@hivecast/core": "*",

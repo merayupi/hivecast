@@ -417,6 +417,61 @@ export class Store {
     this.db.prepare('DELETE FROM signed_txs WHERE dedup_key = ?').run(dedupKey);
   }
 
+  /**
+   * All persisted prepared signed transactions (for the canonical-hash repair
+   * migration and the parent's read-only oracle). Never returns secret keys;
+   * the signed bytes are the ONLY material from which the canonical tx id can
+   * be recomputed without re-signing or replaying a nonce.
+   */
+  listSignedTxs(): { dedupKey: string; signedBytesBase64: string; txHash: string; nonce: string }[] {
+    const rows = this.db
+      .prepare('SELECT dedup_key, signed_bytes_base64, tx_hash, nonce FROM signed_txs ORDER BY dedup_key ASC')
+      .all() as { dedup_key: string; signed_bytes_base64: string; tx_hash: string; nonce: string }[];
+    return rows.map((r) => ({
+      dedupKey: r.dedup_key,
+      signedBytesBase64: r.signed_bytes_base64,
+      txHash: r.tx_hash,
+      nonce: r.nonce,
+    }));
+  }
+
+  /**
+   * Idempotent canonical-hash repair: recompute `tx_hash` from each persisted
+   * signed transaction's UNSIGNED bytes and update `signed_txs` AND the joined
+   * `journal` row (same dedup_key) where it differs. Never re-signs, never
+   * replays a nonce, never touches the signed bytes themselves. Confirmed
+   * journal rows whose signed bytes were already deleted (deleted on success)
+   * are NOT touched here — their historical hash is recoverable only from the
+   * chain receipt (parent oracle), never by re-signing.
+   * `computeCanonicalHash` is `canonicalTxHashFromSignedBytes` from the chain
+   * module. Returns the number of signed_txs rows repaired.
+   */
+  repairSignedTxHashes(computeCanonicalHash: (signedBytesBase64: string) => string): number {
+    let repaired = 0;
+    const rows = this.db
+      .prepare('SELECT dedup_key, signed_bytes_base64, tx_hash FROM signed_txs')
+      .all() as { dedup_key: string; signed_bytes_base64: string; tx_hash: string }[];
+    for (const r of rows) {
+      let canonical: string;
+      try {
+        canonical = computeCanonicalHash(r.signed_bytes_base64);
+      } catch {
+        continue; // malformed signed bytes; leave untouched
+      }
+      if (canonical !== r.tx_hash) {
+        this.db
+          .prepare('UPDATE signed_txs SET tx_hash = ? WHERE dedup_key = ?')
+          .run(canonical, r.dedup_key);
+        // Propagate to the joined journal row (same dedup_key) if still present.
+        this.db
+          .prepare('UPDATE journal SET tx_hash = ? WHERE dedup_key = ?')
+          .run(canonical, r.dedup_key);
+        repaired++;
+      }
+    }
+    return repaired;
+  }
+
   /** Persist exact source evidence (raw response, request, model/grid/units/hash). */
   saveEvidence(questionId: number, stage: 'input' | 'resolve', evidenceJson: string, hash: string): void {
     this.db
@@ -711,10 +766,17 @@ export class Store {
       .run(txHash, Date.now(), dedupKey);
   }
 
-  markConfirmed(dedupKey: string): void {
-    this.db
-      .prepare(`UPDATE journal SET status = 'confirmed', updated_at = ? WHERE dedup_key = ?`)
-      .run(Date.now(), dedupKey);
+  /** Confirm AND retain the finalized transaction hash (canonical). */
+  markConfirmed(dedupKey: string, txHash?: string): void {
+    if (txHash) {
+      this.db
+        .prepare(`UPDATE journal SET status = 'confirmed', tx_hash = ?, error = NULL, updated_at = ? WHERE dedup_key = ?`)
+        .run(txHash, Date.now(), dedupKey);
+    } else {
+      this.db
+        .prepare(`UPDATE journal SET status = 'confirmed', updated_at = ? WHERE dedup_key = ?`)
+        .run(Date.now(), dedupKey);
+    }
   }
 
   markFailed(dedupKey: string, error: string): void {
