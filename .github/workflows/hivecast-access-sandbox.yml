@@ -46,10 +46,13 @@ jobs:
           mv "$BIN" "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox"
           chmod +x "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox"
           "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox" --version || true
+          # Export the expanded absolute path for the next step (env.HOME is not
+          # set in GITHUB_ENV; shell $HOME is /home/runner).
+          echo "NEAR_SANDBOX_BIN_PATH=$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox" >> "$GITHUB_ENV"
 
       - name: Run real near-sandbox Forecast Access proof
         working-directory: packages/runner
         env:
           HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
-          NEAR_SANDBOX_BIN_PATH: ${{ env.HOME }}/.near/near-sandbox-2.14.0-rc.5/near-sandbox
+          NEAR_SANDBOX_BIN_PATH: ${{ env.NEAR_SANDBOX_BIN_PATH }}
         run: npm run sandbox:access

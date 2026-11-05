@@ -20,6 +20,10 @@
  *  10. a function-call key (not FullAccess) → 401 not_full_access
  *  11. concurrent challenge consumption admits exactly one verifier
  *  12. missing private snapshot → 503 snapshot_unavailable (no fabricated data)
+ *  13. TS → WASM reveal integration: resolve with the pinned resolver, reveal
+ *      via NearChainClient using the ORIGINAL commitment prob/salt, assert the
+ *      on-chain get_commitment reveals the same probability, settle after the
+ *      real reveal deadline, and withdraw to a real recipient balance increase.
  *
  * Usage (Linux; wasm built + near-sandbox binary present):
  *   HIVECAST_WASM=contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm \
@@ -597,6 +601,52 @@ async function main(): Promise<void> {
     emptyStore.close();
     rmSync(emptyDbPath, { force: true });
     steps.push('missing-snapshot-unavailable');
+
+    // ------------------------------------------------------------------
+    // 13. TS → WASM reveal integration at the approved public seam (real
+    // contract). This is NOT a unit test of the commitment encoder: it drives
+    // the actual `NearChainClient.reveal` (real ed25519 sign + FINAL tx) with
+    // the ORIGINAL TypeScript commitment probability + salt, then asserts the
+    // real on-chain `get_commitment` reveals the same probability, settles
+    // after the real reveal deadline, and withdraws to a real recipient
+    // balance increase. (Sandbox fast-forward only; never accelerated on
+    // testnet.)
+    // ------------------------------------------------------------------
+    await advanceTo(sb.rpcUrl, obsEnd + 2n * NS_PER_BLOCK);
+    await callFunction(resolver.account, contractId, 'resolve', { question_id: questionId, outcome: true });
+    const resolvedAtNs = await currentBlockNs(sb.rpcUrl);
+
+    const revealOutcome = await chain.reveal(questionId, 5000, salt, agent.accountId);
+    assert.equal(revealOutcome.success, true, `reveal failed: ${revealOutcome.error}`);
+
+    const commitment = await chain.getCommitment(questionId, agent.accountId);
+    assert.ok(commitment, 'on-chain commitment not found');
+    assert.equal(commitment.revealed, 5000, 'on-chain reveal does not match the TS commitment probability');
+    steps.push('ts-reveal-matches-onchain');
+
+    await advanceTo(sb.rpcUrl, resolvedAtNs + revealWindow + 2n * NS_PER_BLOCK);
+    const settleOutcome = await chain.settle(questionId, operator.accountId);
+    assert.equal(settleOutcome.success, true, `settle failed: ${settleOutcome.error}`);
+
+    // Single participant with a valid reveal: base stake back + entire fee pool.
+    const balanceBefore = await chain.getBalance(agent.accountId);
+    assert.equal(
+      balanceBefore.claimable,
+      (minStake + accessPrice).toString(),
+      'single-participant claimable should be stake + fee pool',
+    );
+    steps.push('settle-claimable-exact');
+
+    const nativeBefore = await chain.viewAccountBalance(agent.accountId);
+    const withdrawOutcome = await chain.withdraw(minStake + accessPrice, agent.accountId);
+    assert.equal(withdrawOutcome.success, true, `withdraw failed: ${withdrawOutcome.error}`);
+    const nativeAfter = await chain.viewAccountBalance(agent.accountId);
+    assert.ok(nativeAfter > nativeBefore, 'recipient balance did not increase after withdraw');
+
+    const balanceAfter = await chain.getBalance(agent.accountId);
+    assert.equal(balanceAfter.claimable, '0', 'claimable not cleared after withdraw');
+    assert.equal(balanceAfter.received, (minStake + accessPrice).toString(), 'received not recorded');
+    steps.push('withdraw-delivers-funds');
 
     process.stdout.write(`access-sandbox OK (${steps.length} checks): ${steps.join(', ')}\n`);
     process.stdout.write(
