@@ -64,12 +64,13 @@ const SAND_ACCOUNT = 'sandbox';
 const CLONE_ACCOUNT = 'clone';
 const GENESIS_BALANCE = 10_000_000_000_000_000_000_000_000_000n; // 10,000 NEAR
 
-type FixtureMode = 'weather-below' | 'weather-equal' | 'weather-above' | 'missing-resolve';
+type FixtureMode = 'weather-below' | 'weather-equal' | 'weather-above' | 'missing-resolve' | 'price-equal';
 
 interface HttpFixture {
   base: string;
   setMode(m: FixtureMode): void;
   setDate(d: string): void;
+  setPriceOpenMs(ms: number): void;
   close: () => Promise<void>;
 }
 
@@ -397,9 +398,17 @@ function startFixture(): Promise<HttpFixture> {
   return new Promise((resolveFixture) => {
     let mode: FixtureMode = 'weather-below';
     let targetDate = '';
+    let priceOpenMs = 0;
     const server: HttpServer = createHttpServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost');
       res.setHeader('content-type', 'application/json; charset=utf-8');
+      if (url.pathname === '/api/v3/klines') {
+        const closeTime = priceOpenMs + MS_PER_HOUR - 1;
+        const open = '100';
+        const close = mode === 'price-equal' ? '100' : '101';
+        res.end(JSON.stringify([[priceOpenMs, open, '102', '99', close, '1000', closeTime, '101000', '100', '500', '50500']]));
+        return;
+      }
       if (url.pathname === '/v1/archive') {
         if (mode === 'missing-resolve') {
           res.statusCode = 404;
@@ -427,6 +436,9 @@ function startFixture(): Promise<HttpFixture> {
         },
         setDate: (d) => {
           targetDate = d;
+        },
+        setPriceOpenMs: (ms) => {
+          priceOpenMs = ms;
         },
         close: () => new Promise<void>((r) => server.close(() => r())),
       });
@@ -480,6 +492,7 @@ async function main(): Promise<void> {
         databasePath: path.join(tmpdir(), `hc-source-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`),
         seed: 42,
         pollIntervalMs: 60_000,
+        rpcTimeoutMs: 30_000,
         minStakeYocto: nearToYocto('0.1'),
         accessPriceYocto: nearToYocto('0.01'),
         agentAccounts: buildAgentAccounts(agentAccts),
@@ -613,13 +626,84 @@ async function main(): Promise<void> {
     await weatherScenario('missing-resolve', 'cancel');
     process.stdout.write('source-boundary: missing source → timeout-cancel (public phase)\n');
 
-    // P1 (price equal close → NO) requires a production change: the price path
-    // of LiveSourceProvider.resolveOutcome derives "completed" from the real
-    // wall clock (Date.now()), while the sandbox chain advances on block time,
-    // so a real-past candle cannot coexist with a future resolve window. The
-    // weather boundary (< / == / > threshold, missing→cancel) is proven above;
-    // the price equal-close case is deferred until the runner's price fetcher
-    // accepts the injected chain clock (coordinated with RunnerImplementer).
+    // P1. Price equal close → NO. The production price fetcher reads its "now"
+    // from the injected chain clock (chain.nowNs()), so we anchor the target
+    // hour in the sandbox FUTURE, fast-forward through open→commit→observation
+    // end, and let resolveOutcome derive NO from an equal open/close candle.
+    {
+      const priceOpenMs = nsToMs(t0) + 2 * MS_PER_HOUR; // future hour relative to sandbox
+      const obsEndMs = priceOpenMs + MS_PER_HOUR;
+      const resolveDeadlineMs = priceOpenMs + MS_PER_HOUR + 15 * MS_PER_MIN;
+      fixture.setMode('price-equal');
+      fixture.setPriceOpenMs(priceOpenMs);
+
+      const config = buildConfig();
+      const innerChain = new NearChainClient(config);
+      const chain = new SandboxClockChain(innerChain, t0);
+      const store = new Store(config.databasePath, config.networkId, config.contractId);
+      const sourceJson = JSON.stringify({ kind: 'price', instrument: 'NEARUSDT', interval: '1h' });
+
+      const questionId = (await callFunction(operatorAccount, contractId, 'create_question', {
+        spec: {
+          text: 'Price boundary fixture',
+          event_definition: 'Binance spot NEARUSDT 1h candle: YES means close > open',
+          source: sourceJson,
+          resolver: resolver.accountId,
+          open_time: msToNs(priceOpenMs - 15 * MS_PER_MIN).toString(),
+          close_time: msToNs(priceOpenMs - 5 * MS_PER_MIN).toString(),
+          observation_start: msToNs(priceOpenMs).toString(),
+          observation_end: msToNs(obsEndMs).toString(),
+          resolve_time: null,
+          resolve_deadline: msToNs(resolveDeadlineMs).toString(),
+          reveal_window: msToNs(15 * MS_PER_MIN).toString(),
+          access_price: accessPrice.toString(),
+          min_stake: minStake.toString(),
+        },
+      })) as number;
+      assert.ok(typeof questionId === 'number');
+
+      const local: LocalQuestion = {
+        questionId,
+        domain: 'price',
+        text: 'Price boundary fixture',
+        eventDefinition: 'Binance spot NEARUSDT 1h candle: YES means close > open',
+        sourceJson,
+        sourceLabel: 'Binance NEARUSDT 1h',
+        resolver: resolver.accountId,
+        openTimeNs: msToNs(priceOpenMs - 15 * MS_PER_MIN),
+        closeTimeNs: msToNs(priceOpenMs - 5 * MS_PER_MIN),
+        observationStartNs: msToNs(priceOpenMs),
+        observationEndNs: msToNs(obsEndMs),
+        resolveTimeNs: msToNs(obsEndMs),
+        resolveDeadlineNs: msToNs(resolveDeadlineMs),
+        revealWindowNs: msToNs(15 * MS_PER_MIN),
+        accessPrice,
+        minStake,
+        participants: [{ agentId: 'coinflip', accountId: agentAccts.get('coinflip')! }],
+      };
+      store.saveQuestion(local, `price:${priceOpenMs}`);
+
+      // 1. Commit a coinflip agent (deterministic, no candle dependency) so the
+      //    Round has a participant and cannot take the zero-commitments cancel.
+      await advanceTo(sb.rpcUrl, local.openTimeNs + 2n * NS_PER_BLOCK, blockTimeNs);
+      chain.setNow(await currentBlockNs(sb.rpcUrl));
+      await new Runner(config, chain, store).tick();
+      const commits = await innerChain.listCommitments(questionId, 0, 64);
+      assert.ok(commits.length >= 1, `expected >=1 commitment, got ${commits.length}`);
+
+      // 2. Fast-forward past observation end (resolve_time) so the injected
+      //    chain clock makes the equal open/close candle "completed" → NO.
+      await advanceTo(sb.rpcUrl, local.resolveTimeNs + 2n * NS_PER_BLOCK, blockTimeNs);
+      chain.setNow(await currentBlockNs(sb.rpcUrl));
+      await new Runner(config, chain, store).tick();
+
+      const q = await innerChain.getQuestion(questionId);
+      assert.equal(q?.phase, 'resolved', `expected resolved, got ${JSON.stringify(q)}`);
+      assert.equal(q?.outcome, false, 'equal-close must resolve NO');
+      store.close();
+      rmSync(config.databasePath, { force: true });
+      process.stdout.write('source-boundary: price equal close → NO (public outcome)\n');
+    }
 
     process.stdout.write('source-boundary-sandbox OK\n');
   } finally {
