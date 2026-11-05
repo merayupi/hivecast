@@ -231,6 +231,20 @@ npm run sandbox:recovery --workspace @hivecast/runner                # Linux: re
 npm run sandbox:source --workspace @hivecast/runner                  # Linux: real near-sandbox source-boundary proof (equal-close NO, threshold precipitation, missing-source wait/cancel)
 ```
 
+> **Reviewed-head runtime evidence (integration `77d3fb1`).** The Linux runtime
+> matrix (https://github.com/merayupi/hivecast/actions/runs/42062812264) at the
+> exact reviewed head passed all three sandbox harnesses: access `2m04s`,
+> recovery `2m28s`, source `2m44s` — production WASM/Runner/HTTP access checks,
+> real accepted-response loss + same SQLite restart/canonical tx hash/same
+> commitment/snapshot/exact one payout, a separate signer consuming the cached
+> nonce → one recovered Question, production source parsers over external HTTP
+> fixtures (full WIB-day precipitation `<1mm` NO, `=1` YES, `>1` YES; valid
+> Commit then resolution-source outage through the full 48h grace →
+> Cancellation; completed candle equality → NO). The large Sandbox genesis epoch
+> avoids physical tiny-epoch boundary stalls and never shortens product windows
+> or testnet time. This is Linux-only; Windows rebuilds are not byte-identical
+> to the deployed WASM and the matrix is not claimed to have run on Windows.
+
 ## Exact source semantics (`src/source.ts`)
 
 - **Price** — Binance spot `NEARUSDT`, interval `1h`, UTC. Only completed

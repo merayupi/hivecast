@@ -36,20 +36,12 @@ import { Account, JsonRpcProvider, KeyPair, actions, nearToYocto } from 'near-ap
 import type { AgentId } from '@hivecast/core';
 
 import { NearChainClient } from '../src/chain/near.js';
-import type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs, TxFinalStatusView } from '../src/chain/types.js';
 import type { RunnerConfig } from '../src/config.js';
 import { Runner } from '../src/runner.js';
 import { Store } from '../src/store.js';
+import { SandboxChainBase } from './sandbox-chain.js';
 import { wibDateOfUtcMs, msToNs, nsToMs, MS_PER_HOUR, MS_PER_DAY, MS_PER_MIN, computeWeatherSchedule, computePriceSchedule, hourFloorUtc } from '../src/schedule.js';
-import type {
-  BalanceView,
-  BuyerReceiptView,
-  CommitmentView,
-  ContractState,
-  LocalQuestion,
-  PendingWithdrawalView,
-  QuestionView,
-} from '../src/types.js';
+import type { LocalQuestion } from '../src/types.js';
 
 const WASM_PATH = process.env.HIVECAST_WASM ?? 'contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm';
 const SANDBOX_BIN =
@@ -326,116 +318,6 @@ async function callFunction(
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Block-time adapter (spec-allowed): delegate everything, override nowNs().
-// ---------------------------------------------------------------------------
-class SandboxClockChain implements ChainClient {
-  readonly contractId: string;
-  private readonly inner: NearChainClient;
-  private currentNs: bigint;
-  constructor(inner: NearChainClient, initialNs: bigint) {
-    this.inner = inner;
-    this.contractId = inner.contractId;
-    this.currentNs = initialNs;
-  }
-  setNow(ns: bigint): void {
-    this.currentNs = ns;
-  }
-  nowNs(): bigint {
-    return this.currentNs;
-  }
-  getContractState(): Promise<ContractState> {
-    return this.inner.getContractState();
-  }
-  getQuestion(q: number): Promise<QuestionView | null> {
-    return this.inner.getQuestion(q);
-  }
-  listQuestions(f: number, l: number): Promise<QuestionView[]> {
-    return this.inner.listQuestions(f, l);
-  }
-  getCommitment(q: number, a: string): Promise<CommitmentView | null> {
-    return this.inner.getCommitment(q, a);
-  }
-  listCommitments(q: number, f: number, l: number): Promise<CommitmentView[]> {
-    return this.inner.listCommitments(q, f, l);
-  }
-  getBalance(a: string): Promise<BalanceView> {
-    return this.inner.getBalance(a);
-  }
-  hasBought(q: number, a: string): Promise<boolean> {
-    return this.inner.hasBought(q, a);
-  }
-  getBuyerReceipt(q: number, a: string): Promise<BuyerReceiptView | null> {
-    return this.inner.getBuyerReceipt(q, a);
-  }
-  listBuyers(q: number, f: number, l: number): Promise<BuyerReceiptView[]> {
-    return this.inner.listBuyers(q, f, l);
-  }
-  getPendingWithdrawal(n: number): Promise<PendingWithdrawalView | null> {
-    return this.inner.getPendingWithdrawal(n);
-  }
-  listPendingWithdrawals(a: string, f: number, l: number): Promise<PendingWithdrawalView[]> {
-    return this.inner.listPendingWithdrawals(a, f, l);
-  }
-  viewAccountBalance(a: string): Promise<bigint> {
-    return this.inner.viewAccountBalance(a);
-  }
-  viewNativeBalance(a: string): Promise<bigint> {
-    return this.inner.viewNativeBalance(a);
-  }
-  viewNativeAvailable(a: string): Promise<bigint> {
-    return this.inner.viewNativeAvailable(a);
-  }
-  viewAccessKeyPermission(a: string, pk: string): Promise<'full-access' | 'function-call' | null> {
-    return this.inner.viewAccessKeyPermission(a, pk);
-  }
-  viewTxTokensBurnt(h: string, s: string): Promise<string | null> {
-    return this.inner.viewTxTokensBurnt(h, s);
-  }
-  viewTxFinalStatus(h: string, a: string): Promise<TxFinalStatusView | null> {
-    return this.inner.viewTxFinalStatus(h, a);
-  }
-  prepareCall(m: string, args: Record<string, unknown>, s: string, d: bigint, g?: bigint): Promise<PreparedCall> {
-    return this.inner.prepareCall(m, args, s, d, g);
-  }
-  broadcastCall(b: string): Promise<CallOutcome> {
-    return this.inner.broadcastCall(b);
-  }
-  evictAccountNonceCache(accountId: string): void {
-    this.inner.evictAccountNonceCache(accountId);
-  }
-  createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome> {
-    return this.inner.createQuestion(spec, signer);
-  }
-  commit(q: number, h: string, stake: bigint, signer: string): Promise<CallOutcome> {
-    return this.inner.commit(q, h, stake, signer);
-  }
-  publishSnapshot(q: number, sid: string, signer: string): Promise<CallOutcome> {
-    return this.inner.publishSnapshot(q, sid, signer);
-  }
-  buyForecast(q: number, price: bigint, signer: string): Promise<CallOutcome> {
-    return this.inner.buyForecast(q, price, signer);
-  }
-  resolve(q: number, o: boolean, signer: string): Promise<CallOutcome> {
-    return this.inner.resolve(q, o, signer);
-  }
-  reveal(q: number, p: number, salt: string, signer: string): Promise<CallOutcome> {
-    return this.inner.reveal(q, p, salt, signer);
-  }
-  settle(q: number, signer: string): Promise<CallOutcome> {
-    return this.inner.settle(q, signer);
-  }
-  cancel(q: number, signer: string): Promise<CallOutcome> {
-    return this.inner.cancel(q, signer);
-  }
-  claimBuyerRefund(q: number, signer: string): Promise<CallOutcome> {
-    return this.inner.claimBuyerRefund(q, signer);
-  }
-  withdraw(amount: bigint, signer: string): Promise<CallOutcome> {
-    return this.inner.withdraw(amount, signer);
-  }
-}
-
 function buildAgentAccounts(accts: Map<string, string>): Record<AgentId, string> {
   return {
     meteo: accts.get('meteo')!,
@@ -595,7 +477,7 @@ async function main(): Promise<void> {
 
       const config = buildConfig();
       const innerChain = new NearChainClient(config);
-      const chain = new SandboxClockChain(innerChain, await currentBlockNs(sb.rpcUrl));
+      const chain = new SandboxChainBase(innerChain, await currentBlockNs(sb.rpcUrl));
       const store = new Store(config.databasePath, config.networkId, config.contractId);
 
       const sourceJson = JSON.stringify({
@@ -738,7 +620,7 @@ async function main(): Promise<void> {
 
       const config = buildConfig();
       const innerChain = new NearChainClient(config);
-      const chain = new SandboxClockChain(innerChain, await currentBlockNs(sb.rpcUrl));
+      const chain = new SandboxChainBase(innerChain, await currentBlockNs(sb.rpcUrl));
       const store = new Store(config.databasePath, config.networkId, config.contractId);
       const sourceJson = JSON.stringify({ kind: 'price', instrument: 'NEARUSDT', interval: '1h' });
 
