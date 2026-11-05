@@ -167,7 +167,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
         <p className="detail-event">{q.event_definition}</p>
       </div>
 
-      <PhaseLadder q={q} />
+      <PhaseLadder q={q} nowMs={nowMs} />
 
       <div className="detail-stats">
         <Stat label="Query fee" value={`${near(q.access_price)} Ⓝ`} hint="one fixed fee per Question" />

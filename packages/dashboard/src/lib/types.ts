@@ -152,7 +152,8 @@ export interface LeaderboardEntry {
   brier_mean: number | null;
   brier_sum_sq: string;
   total_stake: string;
-  locked_stake: string;
+  /** `null` when coverage is partial and locked stake is unavailable. */
+  locked_stake: string | null;
 }
 
 export interface GlobalLeaderboard {
@@ -160,6 +161,8 @@ export interface GlobalLeaderboard {
   contract_id: string;
   generated_at: string;
   total_questions: number;
+  fetched_questions: number;
+  coverage: 'complete' | 'partial';
   resolved_questions: number;
   gas_disclosure: string;
   entries: LeaderboardEntry[];
@@ -169,13 +172,15 @@ export interface AccountEconomics {
   account_id: string;
   bankroll: string | null;
   available: string | null;
-  locked_stake: string;
-  claimable: string;
-  pending: string;
-  received: string;
+  /** `null` when coverage is partial (locked stake unavailable). */
+  locked_stake: string | null;
+  claimable: string | null;
+  pending: string | null;
+  received: string | null;
   wagering_pnl: string;
   fee_income: string;
   gas_burnt: string;
+  gas_coverage: 'complete' | 'partial';
   participated: boolean;
 }
 
@@ -183,6 +188,9 @@ export interface EconomicsReport {
   network_id: string;
   contract_id: string;
   generated_at: string;
+  total_questions: number;
+  fetched_questions: number;
+  coverage: 'complete' | 'partial';
   separation_note: string;
   accounts: AccountEconomics[];
 }

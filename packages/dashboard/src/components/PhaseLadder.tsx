@@ -7,24 +7,28 @@ interface Milestone {
   ns: string | null;
 }
 
+/**
+ * The Round's real schedule milestones, labelled precisely (not a fake phase).
+ * Snapshot sale is NOT a milestone on its own: it opens after the commitment
+ * cutoff (once the snapshot is ready) and closes at observation start.
+ */
 function milestones(q: QuestionView): Milestone[] {
   return [
     { key: 'open', label: 'Opening', ns: q.open_time },
     { key: 'cutoff', label: 'Commitment cutoff', ns: q.close_time },
-    { key: 'snapshot', label: 'Snapshot sale', ns: q.observation_start },
-    { key: 'observe', label: 'Observation', ns: q.observation_end },
-    { key: 'resolve', label: 'Resolution deadline', ns: q.resolve_deadline },
-    { key: 'reveal', label: 'Reveal deadline', ns: q.reveal_deadline },
+    { key: 'obs-start', label: 'Observation starts · sale closes', ns: q.observation_start },
+    { key: 'obs-end', label: 'Observation ends', ns: q.observation_end },
+    { key: 'resolve-deadline', label: 'Resolution deadline', ns: q.resolve_deadline },
+    { key: 'reveal-deadline', label: 'Reveal deadline', ns: q.reveal_deadline },
   ];
 }
 
 /** The Round lifecycle as a ruled detent track — the dashboard's signature move. */
-export function PhaseLadder({ q }: { q: QuestionView }) {
-  const nowMs = Date.now();
-      const points = milestones(q);
+export function PhaseLadder({ q, nowMs }: { q: QuestionView; nowMs: number }) {
+  const points = milestones(q);
   const revealed = q.reveal_deadline !== null;
 
-  // Determine the active index (the detent "now" sits at/after).
+  // The detent "now" sits at/after the latest passed milestone.
   const nowNs = BigInt(nowMs) * 1_000_000n;
   let active = -1;
   for (let i = 0; i < points.length; i++) {
@@ -33,38 +37,42 @@ export function PhaseLadder({ q }: { q: QuestionView }) {
     if (BigInt(ns) <= nowNs) active = i;
   }
   const terminal = q.phase === 'settled' || q.phase === 'cancelled';
+  const tz = domainTimeZone(questionDomain(q.source));
 
   return (
-    <div className="phase-ladder" role="img" aria-label={`Lifecycle phase: ${q.phase}`}>
-      <div className="phase-track">
+    <div className="phase-ladder">
+      <ol className="phase-track" aria-label={`Lifecycle for phase ${q.phase}`}>
         {points.map((p, i) => {
-          if (p.ns === null) return <div key={p.key} className="phase-detent is-null" />;
+          if (p.ns === null) return <li key={p.key} className="phase-node" />;
           const done = i <= active;
           return (
-            <div key={p.key} className="phase-node">
-              <span className={`phase-detent ${done ? 'is-done' : ''} ${i === active && !terminal ? 'is-now' : ''}`} />
+            <li key={p.key} className="phase-node">
+              <span
+                className={`phase-detent ${done ? 'is-done' : ''} ${i === active && !terminal ? 'is-now' : ''}`}
+                aria-hidden="true"
+              />
               <span className="phase-label small-caps">{p.label}</span>
-            </div>
+              <span className="phase-time num">{fmtDateTimeTz(p.ns, tz)}</span>
+            </li>
           );
         })}
-      </div>
-      <div className="phase-times num">
-        {points.map((p) => {
-          const tz = domainTimeZone(questionDomain(q.source));
-          return p.ns === null ? (
-            <span key={p.key} className="phase-time is-null">—</span>
-          ) : (
-            <span key={p.key} className="phase-time" title={fmtDateTimeTz(p.ns, tz)}>{fmtDateTimeTz(p.ns, tz)}</span>
-          );
-        })}
-      </div>
-      <PhaseNow q={q} revealed={revealed} />
+      </ol>
+      <PhaseNow q={q} revealed={revealed} nowMs={nowMs} tz={tz} />
     </div>
   );
 }
 
-function PhaseNow({ q, revealed }: { q: QuestionView; revealed: boolean }) {
-  const nextNs = nextDeadline(q);
+function PhaseNow({
+  q,
+  revealed,
+  nowMs,
+  tz,
+}: {
+  q: QuestionView;
+  revealed: boolean;
+  nowMs: number;
+  tz: 'UTC' | 'Asia/Jakarta';
+}) {
   if (q.phase === 'settled' || q.phase === 'cancelled') {
     return (
       <p className="phase-now">
@@ -75,39 +83,67 @@ function PhaseNow({ q, revealed }: { q: QuestionView; revealed: boolean }) {
       </p>
     );
   }
+
   if (q.phase === 'resolved') {
-    const outcome = q.outcome === null ? 'pending outcome' : q.outcome ? 'YES' : 'NO';
+    const outcome = q.outcome === null ? 'outcome pending' : q.outcome ? 'YES' : 'NO';
     return (
       <p className="phase-now">
         <span className="chip text-vermilion-700">Resolved · {outcome}</span>
-        {revealed && nextNs ? (
-          <span className="small-caps">reveals close in {countdown(nextNs).label}</span>
+        {revealed && q.reveal_deadline ? (
+          <span className="small-caps">
+            reveals close {fmtDateTimeTz(q.reveal_deadline, tz)} ({countdown(q.reveal_deadline, nowMs).label})
+          </span>
         ) : null}
       </p>
     );
   }
-  if (nextNs === null) return null;
-  const cd = countdown(nextNs);
-  const past = cd.totalMs < 0;
-  return (
-    <p className="phase-now">
-      <span className="chip">{q.phase}</span>
-      <span className="small-caps">
-        {past ? 'window passed' : `next: ${q.phase === 'open' ? 'cutoff' : 'observation'} in ${cd.label}`}
-      </span>
-    </p>
-  );
-}
 
-function nextDeadline(q: QuestionView): string | null {
-  switch (q.phase) {
-    case 'open':
-      return q.close_time;
-    case 'closed':
-      return q.observation_start;
-    case 'resolved':
-      return q.reveal_deadline;
-    default:
-      return null;
+  if (q.phase === 'open') {
+    const nowNs = BigInt(nowMs) * 1_000_000n;
+    // Scheduled (before opening) vs accepting commitments.
+    if (nowNs < BigInt(q.open_time)) {
+      return (
+        <p className="phase-now">
+          <span className="chip text-ink-500">scheduled</span>
+          <span className="small-caps">opens {fmtDateTimeTz(q.open_time, tz)} ({countdown(q.open_time, nowMs).label})</span>
+        </p>
+      );
+    }
+    return (
+      <p className="phase-now">
+        <span className="chip">open</span>
+        <span className="small-caps">commitments close {fmtDateTimeTz(q.close_time, tz)} ({countdown(q.close_time, nowMs).label})</span>
+      </p>
+    );
   }
+
+  if (q.phase === 'closed') {
+    const nowNs = BigInt(nowMs) * 1_000_000n;
+    if (nowNs < BigInt(q.observation_start)) {
+      // Snapshot sale window (after cutoff, before observation).
+      return (
+        <p className="phase-now">
+          <span className="chip">sale open</span>
+          <span className="small-caps">closes at observation start {fmtDateTimeTz(q.observation_start, tz)} ({countdown(q.observation_start, nowMs).label})</span>
+        </p>
+      );
+    }
+    if (nowNs < BigInt(q.observation_end)) {
+      return (
+        <p className="phase-now">
+          <span className="chip text-ink-500">observing</span>
+          <span className="small-caps">ends {fmtDateTimeTz(q.observation_end, tz)} ({countdown(q.observation_end, nowMs).label})</span>
+        </p>
+      );
+    }
+    // Observation ended, outcome not yet resolved.
+    return (
+      <p className="phase-now">
+        <span className="chip text-ink-500">awaiting outcome</span>
+        <span className="small-caps">resolution deadline {fmtDateTimeTz(q.resolve_deadline, tz)} ({countdown(q.resolve_deadline, nowMs).label})</span>
+      </p>
+    );
+  }
+
+  return null;
 }
