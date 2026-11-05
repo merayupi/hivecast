@@ -17,7 +17,7 @@
  *
  * Preconditions:
  *   - corrected contract deployed + initialized (operator = config.operatorId)
- *   - config.chainMode = "rpc"; credentialDirectory holds each signer's key
+ *   - credentialDirectory holds each signer's key
  *   - agent accounts funded so floor-10% sizing clears min_stake (plus gas)
  *
  * Remaining real-chain proof this does NOT claim on its own (requires the
@@ -29,7 +29,6 @@
 import { NearChainClient } from '../src/chain/near.js';
 import { loadConfig } from '../src/config.js';
 import { Runner } from '../src/runner.js';
-import { Runtime } from '../src/runtime.js';
 import {
   computePriceSchedule,
   computeWeatherSchedule,
@@ -50,14 +49,10 @@ async function sleep(ms: number): Promise<void> {
 async function main(): Promise<void> {
   const domain = process.argv[2] === 'weather' ? 'weather' : 'price';
   const config = loadConfig(process.env.HIVECAST_CONFIG ?? 'hivecast.config.json');
-  if (config.chainMode !== 'rpc') {
-    throw new Error('harness requires chainMode "rpc" (real chain), got ' + config.chainMode);
-  }
 
   const chain = new NearChainClient(config);
-  const store = new Store(config.databasePath);
+  const store = new Store(config.databasePath, config.networkId, config.contractId);
   const runner = new Runner(config, chain, store);
-  const runtime = new Runtime(config, chain, store, runner);
 
   // Pick the next full target window.
   const nowMs = Date.now();
@@ -122,11 +117,9 @@ async function main(): Promise<void> {
         process.stdout.write(`[harness] ${s.kind} q=${s.questionId} acct=${s.accountId ?? '-'} NOT-SENT ${s.reason} err=${s.error}\n`);
       }
     }
-    const status = await runtime.getLifecycleStatus(questionId);
     const view = await chain.getQuestion(questionId);
     const terminal = view?.phase === 'settled' || view?.phase === 'cancelled';
-    if (terminal && status) {
-      const allClaimableZero = status.journal.every(() => true);
+    if (terminal) {
       process.stdout.write(`[harness] terminal phase=${view!.phase}\n`);
       // Drain withdrawals once more.
       await runner.tick();

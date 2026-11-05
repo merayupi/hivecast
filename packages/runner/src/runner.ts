@@ -1,30 +1,41 @@
 /**
- * Runner — autonomous lifecycle orchestration over a ChainClient + private
- * Store. All secrets (forecasts, salts) are persisted BEFORE the commit
- * transaction is sent; the transaction journal makes every send idempotent so
- * a restart never duplicates a send or regenerates a secret.
+ * Runner — autonomous lifecycle orchestration over the real NEAR ChainClient
+ * and a private Store. All secrets (forecasts, salts) are persisted BEFORE the
+ * commit transaction is sent; the transaction journal makes every send
+ * idempotent so a restart never duplicates a send or regenerates a secret.
  *
- * Lifecycle per Question (driven by the chain's own phase, which is time-derived):
+ * Lifecycle per Question (driven by the chain's own phase, which is
+ * time-derived):
  *   open      → run strategies, persist forecast+salt, reserve capital, commit
- *   closed    → freeze the immutable Forecast Snapshot, publish readiness,
- *               then resolve (or cancel on timeout / missing outcome)
+ *   closed    → freeze the immutable Forecast Snapshot (best-effort SALE), then
+ *               resolve independently (or cancel: immediately on zero commits,
+ *               or at resolve_deadline on a missing outcome)
  *   resolved  → reveal each participant's forecast with its persisted salt
  *   settled   → withdraw each agent's claimable balance
  *   cancelled → withdraw each agent's refunded stake (no scoring)
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { getStrategy, supportsDomain } from '@hivecast/core';
 import type { AgentId, Domain, StrategyContext, StrategyInputs } from '@hivecast/core';
 import { commitmentHash, generateSalt } from './commitment.js';
-import type { ChainClient } from './chain/types.js';
+import type { ChainClient, CallOutcome } from './chain/types.js';
 import type { RunnerConfig } from './config.js';
-import { nsToMs, priceTargetLabel, weatherTargetLabel, wibDateOfUtcMs } from './schedule.js';
+import {
+  nsToMs,
+  parseSourceSpec,
+  priceTargetLabel,
+  weatherTargetLabel,
+  wibDateOfUtcMs,
+} from './schedule.js';
 import {
   fetchCompletedCandles,
   fetchPriceResolution,
   fetchWeatherForecast,
+  fetchWeatherHistoryDay,
   fetchWeatherResolution,
+  type FetchBases,
+  type Evidence,
 } from './source.js';
 import type { Store } from './store.js';
 import type { ForecastRecord, JournalKind, LocalQuestion, SnapshotRecord } from './types.js';
@@ -42,10 +53,21 @@ export interface TickReport {
   steps: StepResult[];
 }
 
+export interface StrategyInputResult {
+  inputs: StrategyInputs;
+  disclosure: string;
+}
+
+export interface ResolutionResult {
+  outcome: boolean;
+  evidenceJson: string;
+  evidenceHash: string;
+}
+
 /** Point-in-time strategy inputs and resolution outcomes, by Question. */
 export interface SourceProvider {
-  strategyInputs(q: LocalQuestion): Promise<StrategyInputs>;
-  resolveOutcome(q: LocalQuestion): Promise<boolean>;
+  strategyInputs(q: LocalQuestion): Promise<StrategyInputResult>;
+  resolveOutcome(q: LocalQuestion): Promise<ResolutionResult>;
 }
 
 const STAKE_FLOOR_DENOM = 10n; // 10% of available balance
@@ -56,36 +78,60 @@ const WEATHER_HISTORY_DAYS = 30;
 export class LiveSourceProvider implements SourceProvider {
   constructor(private config: RunnerConfig) {}
 
-  async strategyInputs(q: LocalQuestion): Promise<StrategyInputs> {
-    if (q.domain === 'price') {
+  private bases(): FetchBases {
+    return {
+      binanceBaseUrl: this.config.binanceBaseUrl,
+      openMeteoBaseUrl: this.config.openMeteoBaseUrl,
+      archiveBaseUrl: this.config.archiveBaseUrl,
+    };
+  }
+
+  async strategyInputs(q: LocalQuestion): Promise<StrategyInputResult> {
+    const spec = parseSourceSpec(q.sourceJson);
+    const bases = this.bases();
+    if (spec.kind === 'price') {
       const cutoffMs = nsToMs(q.closeTimeNs);
-      const { candles } = await fetchCompletedCandles(this.config, cutoffMs, PRICE_LOOKBACK_CANDLES);
-      return { kind: 'price', candles };
+      const { candles, evidence } = await fetchCompletedCandles(bases, spec, cutoffMs, PRICE_LOOKBACK_CANDLES);
+      return {
+        inputs: { kind: 'price', candles },
+        disclosure: JSON.stringify(evidence),
+      };
     }
     const targetDate = wibDateOfUtcMs(nsToMs(q.observationStartNs));
-    const { forecastPrecipMm } = await fetchWeatherForecast(this.config, targetDate);
+    const { forecastPrecipMm, evidence } = await fetchWeatherForecast(bases, spec, targetDate);
     const historyPrecipMm: string[] = [];
+    const missing: string[] = [];
     for (let i = 1; i <= WEATHER_HISTORY_DAYS; i++) {
       const d = new Date(nsToMs(q.observationStartNs) - i * 86_400_000);
       const date = wibDateOfUtcMs(d.getTime());
       try {
-        const res = await fetchWeatherResolution(this.config, date);
+        const res = await fetchWeatherHistoryDay(bases, spec, date);
         historyPrecipMm.push(res.precipitationMm);
       } catch {
-        // Leave a gap; strategies treat missing history as available-only.
+        // Do not silently drop the gap: record it in the disclosure.
+        missing.push(date);
       }
     }
     historyPrecipMm.reverse();
-    return { kind: 'weather', forecastPrecipMm, historyPrecipMm };
+    return {
+      inputs: { kind: 'weather', forecastPrecipMm, historyPrecipMm },
+      disclosure: JSON.stringify({ forecast: evidence, missingHistoryDays: missing }),
+    };
   }
 
-  async resolveOutcome(q: LocalQuestion): Promise<boolean> {
-    if (q.domain === 'price') {
-      const res = await fetchPriceResolution(this.config, nsToMs(q.observationStartNs));
-      return res.outcome;
+  async resolveOutcome(q: LocalQuestion): Promise<ResolutionResult> {
+    const spec = parseSourceSpec(q.sourceJson);
+    const bases = this.bases();
+    if (spec.kind === 'price') {
+      const res = await fetchPriceResolution(bases, spec, nsToMs(q.observationStartNs), nsToMs(this.nowNs()));
+      return { outcome: res.outcome, evidenceJson: JSON.stringify(res.evidence), evidenceHash: res.evidence.hash };
     }
-    const res = await fetchWeatherResolution(this.config, wibDateOfUtcMs(nsToMs(q.observationStartNs)));
-    return res.outcome;
+    const res = await fetchWeatherResolution(bases, spec, wibDateOfUtcMs(nsToMs(q.observationStartNs)));
+    return { outcome: res.outcome, evidenceJson: JSON.stringify(res.evidence), evidenceHash: res.evidence.hash };
+  }
+
+  private nowNs(): bigint {
+    return BigInt(Date.now()) * 1_000_000n;
   }
 }
 
@@ -112,37 +158,27 @@ export class Runner {
 
   /** Domain-relevant agents (spec §8), deterministic order. */
   private participantsFor(domain: Domain): { agentId: AgentId; accountId: string }[] {
-    const out: { agentId: AgentId; accountId: string }[] = [];
-    for (const id of ['meteo', 'climatology', 'persistence', 'momentum', 'meanrev', 'noisy-trend', 'yolo', 'coinflip'] as AgentId[]) {
-      if (supportsDomain(id, domain)) out.push({ agentId: id, accountId: this.agentAccount(id) });
-    }
-    return out;
+    const order = ['meteo', 'climatology', 'persistence', 'momentum', 'meanrev', 'noisy-trend', 'yolo', 'coinflip'] as AgentId[];
+    return order.filter((id) => supportsDomain(id, domain)).map((id) => ({ agentId: id, accountId: this.agentAccount(id) }));
   }
 
-  private strategyContext(
-    q: LocalQuestion,
-    agentId: AgentId,
-    inputs: StrategyInputs,
-  ): StrategyContext {
+  private strategyContext(q: LocalQuestion, agentId: AgentId, inputs: StrategyInputs): StrategyContext {
     const targetTime =
       q.domain === 'price'
         ? priceTargetLabel(nsToMs(q.observationStartNs))
         : weatherTargetLabel(wibDateOfUtcMs(nsToMs(q.observationStartNs)));
-    return {
-      agentId,
-      domain: q.domain,
-      targetTime,
-      roundKey: `${q.domain}:${q.questionId}`,
-      inputs,
-      seed: this.config.seed,
-    };
+    return { agentId, domain: q.domain, targetTime, roundKey: `${q.domain}:${q.questionId}`, inputs, seed: this.config.seed };
   }
 
   // -------------------------------------------------------------------------
   // Capital sizing
   // -------------------------------------------------------------------------
 
-  /** Available balance for a new stake: native − outstanding reservations − gas. */
+  /**
+   * Available balance for a new stake = native − outstanding (unconfirmed)
+   * reservations − gas. Confirmed commitments release their reservation (the
+   * deposit already left the wallet), so they are NOT double-debited.
+   */
   private async availableForStake(accountId: string): Promise<bigint> {
     const native = await this.chain.viewAccountBalance(accountId);
     const reserved = this.store.totalReserved(accountId);
@@ -151,7 +187,7 @@ export class Runner {
   }
 
   // -------------------------------------------------------------------------
-  // Journal helper (idempotent send)
+  // Journal helper (durable intent → broadcast → reconcile)
   // -------------------------------------------------------------------------
 
   private async runOnce(
@@ -160,9 +196,10 @@ export class Runner {
     questionId: number | null,
     accountId: string | null,
     payload: unknown,
-    send: () => Promise<{ success: boolean; error: string | null }>,
+    send: () => Promise<{ outcome: CallOutcome }>,
     verify: () => Promise<boolean>,
   ): Promise<StepResult> {
+    // Persist intent BEFORE broadcast.
     const { alreadyConfirmed } = this.store.upsertJournal({
       dedupKey,
       kind,
@@ -173,16 +210,25 @@ export class Runner {
     if (alreadyConfirmed) {
       return { kind, questionId, accountId, sent: false, reason: 'already-confirmed', error: null };
     }
-    // Reconcile a previously submitted (crash-orphaned) entry against the chain.
-    const submitted = this.store.getJournal(dedupKey);
-    if (submitted?.status === 'submitted' && (await verify())) {
-      this.store.markConfirmed(dedupKey);
-      return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
+    // Reconcile any pending/submitted entry against the chain before resending.
+    const existing = this.store.getJournal(dedupKey);
+    if (existing && (existing.status === 'pending' || existing.status === 'submitted')) {
+      if (await verify()) {
+        this.store.markConfirmed(dedupKey);
+        return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
+      }
     }
-    const outcome = await send();
+    const { outcome } = await send();
     if (outcome.success) {
+      if (outcome.txHash) this.store.markSubmitted(dedupKey, outcome.txHash);
       this.store.markConfirmed(dedupKey);
       return { kind, questionId, accountId, sent: true, reason: 'sent', error: null };
+    }
+    if (outcome.txHash) {
+      // Included but unproven execution: record the hash so a restart
+      // reconciles by re-verifying against the chain before any resend.
+      this.store.markSubmitted(dedupKey, outcome.txHash);
+      return { kind, questionId, accountId, sent: false, reason: 'submitted-unconfirmed', error: outcome.error };
     }
     this.store.markFailed(dedupKey, outcome.error ?? 'unknown error');
     return { kind, questionId, accountId, sent: false, reason: 'failed', error: outcome.error };
@@ -194,30 +240,29 @@ export class Runner {
 
   private async commitAgent(q: LocalQuestion, agentId: AgentId, accountId: string, inputs: StrategyInputs): Promise<StepResult> {
     const result = getStrategy(agentId)(this.strategyContext(q, agentId, inputs));
+    if (result.kind === 'abstain') {
+      return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: `abstain:${result.reason}`, error: null };
+    }
     const dedupKey = `commit:${q.questionId}:${accountId}`;
     const verify = async () => {
       const c = await this.chain.getCommitment(q.questionId, accountId);
       const f = this.store.getForecast(q.questionId, accountId);
       return c !== null && f !== null && c.hash === f.commitmentHash;
     };
-    if (result.kind === 'abstain') {
-      return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: `abstain:${result.reason}`, error: null };
-    }
-    const probBps = result.probabilityBps;
-    const available = await this.availableForStake(accountId);
-    const stake = available / STAKE_FLOOR_DENOM;
-    if (stake < this.config.minStakeYocto) {
-      return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: 'below-minimum-stake', error: null };
-    }
-    // Persist forecast + salt BEFORE sending (never regenerate on restart).
+    // Reuse the persisted forecast/stake BEFORE rerunning strategy or sizing.
     let forecast = this.store.getForecast(q.questionId, accountId);
     if (!forecast) {
+      const available = await this.availableForStake(accountId);
+      const stake = available / STAKE_FLOOR_DENOM;
+      if (stake < this.config.minStakeYocto) {
+        return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: 'below-minimum-stake', error: null };
+      }
       const salt = generateSalt();
       forecast = {
         questionId: q.questionId,
         agentId,
         accountId,
-        probBps,
+        probBps: result.probabilityBps,
         salt,
         stakeYocto: stake,
         commitmentHash: commitmentHash({
@@ -225,38 +270,41 @@ export class Runner {
           questionId: q.questionId,
           accountId,
           stakeYocto: stake,
-          probBps,
+          probBps: result.probabilityBps,
           salt,
         }),
       };
       this.store.saveForecast(forecast);
+      this.store.reserve(accountId, q.questionId, forecast.stakeYocto);
     }
-    this.store.reserve(accountId, q.questionId, forecast.stakeYocto);
-    return this.runOnce(
+    const step = await this.runOnce(
       dedupKey,
       'commit',
       q.questionId,
       accountId,
       { probBps: forecast.probBps, stake: forecast.stakeYocto.toString() },
-      async () => {
-        const outcome = await this.chain.commit(q.questionId, forecast!.commitmentHash, forecast!.stakeYocto, accountId);
-        if (!outcome.success) this.store.releaseReservation(accountId, q.questionId);
-        return outcome;
-      },
+      async () => ({ outcome: await this.chain.commit(q.questionId, forecast!.commitmentHash, forecast!.stakeYocto, accountId) }),
       verify,
     );
+    // On confirmed commit the deposit has left the wallet: release reservation.
+    if (step.sent || step.reason === 'reconciled' || step.reason === 'already-confirmed') {
+      this.store.releaseReservation(accountId, q.questionId);
+    }
+    return step;
   }
 
   private async commitPhase(q: LocalQuestion): Promise<StepResult[]> {
-    const steps: StepResult[] = [];
-    let inputs: StrategyInputs;
+    let inputsResult: StrategyInputResult;
     try {
-      inputs = await this.source.strategyInputs(q);
+      inputsResult = await this.source.strategyInputs(q);
     } catch (err) {
       return [{ kind: 'commit', questionId: q.questionId, accountId: null, sent: false, reason: 'inputs-unavailable', error: (err as Error).message }];
     }
+    // Persist input evidence (disclosure of availability + missing history).
+    this.store.saveEvidence(q.questionId, 'input', inputsResult.disclosure, createHash('sha256').update(inputsResult.disclosure).digest('hex'));
+    const steps: StepResult[] = [];
     for (const p of q.participants) {
-      steps.push(await this.commitAgent(q, p.agentId, p.accountId, inputs));
+      steps.push(await this.commitAgent(q, p.agentId, p.accountId, inputsResult.inputs));
     }
     return steps;
   }
@@ -269,73 +317,59 @@ export class Runner {
       denom += e.stakeYocto;
     }
     if (denom === 0n) return 0;
-    // Round-half-up to the nearest basis point.
     return Number((num + denom / 2n) / denom);
   }
 
-  private snapshotIdFor(entries: SnapshotRecord['entries'], questionId: number): string {
-    const canon = JSON.stringify(
-      entries
-        .map((e) => [e.accountId, e.probBps, e.stakeYocto])
-        .sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)),
-    );
-    const digest = createHash('sha256').update(canon).digest('hex');
-    return `snapshot-${questionId}-${digest.slice(0, 16)}`;
-  }
-
+  /** Freeze an immutable snapshot; publication is idempotent and retried. */
   private async freezeSnapshot(q: LocalQuestion): Promise<StepResult[]> {
-    const existing = this.store.getSnapshot(q.questionId);
-    if (existing) {
-      return [{ kind: 'publish_snapshot', questionId: q.questionId, accountId: null, sent: false, reason: 'snapshot-already-frozen', error: null }];
-    }
-    // Match every private forecast against its chain commitment.
-    const chainCommitments = await this.chain.listCommitments(q.questionId, 0, 64);
-    const bigEntries: { accountId: string; probBps: number; stakeYocto: bigint }[] = [];
-    for (const c of chainCommitments) {
-      const f = this.store.getForecast(q.questionId, c.account_id);
-      if (!f || f.commitmentHash !== c.hash) {
-        return [{ kind: 'publish_snapshot', questionId: q.questionId, accountId: c.account_id, sent: false, reason: 'forecast-commitment-mismatch', error: null }];
+    // Reuse the frozen snapshot if present; never regenerate its id/entries.
+    let snapshot = this.store.getSnapshot(q.questionId);
+    if (!snapshot) {
+      const chainCommitments = await this.chain.listCommitments(q.questionId, 0, 64);
+      const bigEntries: { accountId: string; probBps: number; stakeYocto: bigint }[] = [];
+      for (const c of chainCommitments) {
+        const f = this.store.getForecast(q.questionId, c.account_id);
+        if (!f || f.commitmentHash !== c.hash) {
+          // Missing/mismatched private forecast blocks SALE only, not the Round.
+          return [{ kind: 'publish_snapshot', questionId: q.questionId, accountId: c.account_id, sent: false, reason: 'forecast-commitment-mismatch', error: null }];
+        }
+        bigEntries.push({ accountId: c.account_id, probBps: f.probBps, stakeYocto: f.stakeYocto });
       }
-      bigEntries.push({ accountId: c.account_id, probBps: f.probBps, stakeYocto: f.stakeYocto });
+      if (bigEntries.length === 0) {
+        return [{ kind: 'publish_snapshot', questionId: q.questionId, accountId: null, sent: false, reason: 'no-commitments', error: null }];
+      }
+      const aggregateBps = this.computeAggregateBps(bigEntries);
+      const totalStakeYocto = bigEntries.reduce((s, e) => s + e.stakeYocto, 0n);
+      const entries: SnapshotRecord['entries'] = bigEntries.map((e) => ({ accountId: e.accountId, probBps: e.probBps, stakeYocto: e.stakeYocto.toString() }));
+      snapshot = {
+        questionId: q.questionId,
+        snapshotId: randomBytes(16).toString('hex'), // independent CSPRNG id, persisted once
+        aggregateBps,
+        totalStakeYocto,
+        participantCount: entries.length,
+        entries,
+      };
+      this.store.saveSnapshot(snapshot);
     }
-    if (bigEntries.length === 0) {
-      return [{ kind: 'publish_snapshot', questionId: q.questionId, accountId: null, sent: false, reason: 'no-commitments', error: null }];
-    }
-    const aggregateBps = this.computeAggregateBps(bigEntries);
-    const totalStakeYocto = bigEntries.reduce((s, e) => s + e.stakeYocto, 0n);
-    const entries: SnapshotRecord['entries'] = bigEntries.map((e) => ({
-      accountId: e.accountId,
-      probBps: e.probBps,
-      stakeYocto: e.stakeYocto.toString(),
-    }));
-    const snapshotId = this.snapshotIdFor(entries, q.questionId);
-    const snapshot: SnapshotRecord = {
-      questionId: q.questionId,
-      snapshotId,
-      aggregateBps,
-      totalStakeYocto,
-      participantCount: entries.length,
-      entries,
-    };
-    this.store.saveSnapshot(snapshot);
+    // Retry publication until the chain confirms this snapshot id.
     return [
       await this.runOnce(
         `publish_snapshot:${q.questionId}`,
         'publish_snapshot',
         q.questionId,
         null,
-        { snapshotId },
-        () => this.chain.publishSnapshot(q.questionId, snapshotId, this.config.operatorId).then((o) => ({ success: o.success, error: o.error })),
-        async () => (await this.chain.getQuestion(q.questionId))?.snapshot_id === snapshotId,
+        { snapshotId: snapshot.snapshotId },
+        async () => ({ outcome: await this.chain.publishSnapshot(q.questionId, snapshot!.snapshotId, this.config.operatorId) }),
+        async () => (await this.chain.getQuestion(q.questionId))?.snapshot_id === snapshot!.snapshotId,
       ),
     ];
   }
 
   private async resolvePhase(q: LocalQuestion): Promise<StepResult[]> {
     const now = this.nowNs();
-    let outcome: boolean;
+    let resolution: ResolutionResult;
     try {
-      outcome = await this.source.resolveOutcome(q);
+      resolution = await this.source.resolveOutcome(q);
     } catch (err) {
       if (now >= q.resolveDeadlineNs) {
         return [
@@ -345,21 +379,23 @@ export class Runner {
             q.questionId,
             null,
             { reason: 'timeout' },
-            () => this.chain.cancel(q.questionId, this.config.operatorId).then((o) => ({ success: o.success, error: o.error })),
+            async () => ({ outcome: await this.chain.cancel(q.questionId, this.config.operatorId) }),
             async () => (await this.chain.getQuestion(q.questionId))?.phase === 'cancelled',
           ),
         ];
       }
       return [{ kind: 'resolve', questionId: q.questionId, accountId: null, sent: false, reason: 'outcome-unavailable', error: (err as Error).message }];
     }
+    // Persist exact resolution evidence before posting the outcome.
+    this.store.saveEvidence(q.questionId, 'resolve', resolution.evidenceJson, resolution.evidenceHash);
     return [
       await this.runOnce(
         `resolve:${q.questionId}`,
         'resolve',
         q.questionId,
         null,
-        { outcome },
-        () => this.chain.resolve(q.questionId, outcome, this.config.resolverId).then((o) => ({ success: o.success, error: o.error })),
+        { outcome: resolution.outcome },
+        async () => ({ outcome: await this.chain.resolve(q.questionId, resolution.outcome, this.config.resolverId) }),
         async () => (await this.chain.getQuestion(q.questionId))?.outcome !== null,
       ),
     ];
@@ -379,7 +415,7 @@ export class Runner {
           q.questionId,
           p.accountId,
           { probBps: f.probBps },
-          () => this.chain.reveal(q.questionId, f.probBps, f.salt, p.accountId).then((o) => ({ success: o.success, error: o.error })),
+          async () => ({ outcome: await this.chain.reveal(q.questionId, f.probBps, f.salt, p.accountId) }),
           async () => (await this.chain.getCommitment(q.questionId, p.accountId))?.revealed === f.probBps,
         ),
       );
@@ -391,10 +427,8 @@ export class Runner {
     const balance = await this.chain.getBalance(accountId);
     const claimable = BigInt(balance.claimable);
     if (claimable <= 0n) {
-      this.store.releaseReservation(accountId, q.questionId);
       return { kind: 'withdraw', questionId: q.questionId, accountId, sent: false, reason: 'nothing-claimable', error: null };
     }
-    // Skip while an earlier request is still in flight (avoid double-withdraw).
     if (BigInt(balance.pending) > 0n) {
       return { kind: 'withdraw', questionId: q.questionId, accountId, sent: false, reason: 'pending-in-flight', error: null };
     }
@@ -407,7 +441,7 @@ export class Runner {
       q.questionId,
       accountId,
       { amount: amount.toString() },
-      () => this.chain.withdraw(amount, accountId).then((o) => ({ success: o.success, error: o.error })),
+      async () => ({ outcome: await this.chain.withdraw(amount, accountId) }),
       async () => BigInt((await this.chain.getBalance(accountId)).claimable) < amount,
     );
   }
@@ -424,42 +458,37 @@ export class Runner {
   // Public orchestration
   // -------------------------------------------------------------------------
 
-  /** Advance one locally-tracked question through its current lifecycle step. */
   async advance(q: LocalQuestion): Promise<StepResult[]> {
     const chainQuestion = await this.chain.getQuestion(q.questionId);
     if (!chainQuestion) {
       return [{ kind: 'advance', questionId: q.questionId, accountId: null, sent: false, reason: 'not-on-chain', error: null }];
     }
-    const now = this.nowNs();
     switch (chainQuestion.phase) {
       case 'open':
         return this.commitPhase(q);
       case 'closed': {
         const steps: StepResult[] = [];
-        // Freeze snapshot first, then resolve (or cancel on timeout).
-        if (!chainQuestion.snapshot_ready) {
-          const freeze = await this.freezeSnapshot(q);
-          steps.push(...freeze);
-          const blocked =
-            freeze.some((s) => s.reason === 'forecast-commitment-mismatch') ||
-            freeze.some((s) => s.reason === 'no-commitments');
-          if (blocked) {
-            if (now >= q.resolveDeadlineNs) {
-              steps.push(
-                await this.runOnce(
-                  `cancel:${q.questionId}`,
-                  'cancel',
-                  q.questionId,
-                  null,
-                  { reason: 'no-outcome' },
-                  () => this.chain.cancel(q.questionId, this.config.operatorId).then((o) => ({ success: o.success, error: o.error })),
-                  async () => (await this.chain.getQuestion(q.questionId))?.phase === 'cancelled',
-                ),
-              );
-            }
-            return steps;
-          }
+        const commits = await this.chain.listCommitments(q.questionId, 0, 64);
+        // Zero commitments → cancel immediately at close (no waiting).
+        if (commits.length === 0) {
+          steps.push(
+            await this.runOnce(
+              `cancel:${q.questionId}`,
+              'cancel',
+              q.questionId,
+              null,
+              { reason: 'zero-commitments' },
+              async () => ({ outcome: await this.chain.cancel(q.questionId, this.config.operatorId) }),
+              async () => (await this.chain.getQuestion(q.questionId))?.phase === 'cancelled',
+            ),
+          );
+          return steps;
         }
+        // Best-effort snapshot publication (SALE) — never blocks resolution.
+        if (!chainQuestion.snapshot_ready) {
+          steps.push(...(await this.freezeSnapshot(q)));
+        }
+        // Resolution is independent of snapshot readiness.
         steps.push(...(await this.resolvePhase(q)));
         return steps;
       }
@@ -473,8 +502,24 @@ export class Runner {
     }
   }
 
+  /** Reconcile any create_question intents whose broadcast crashed before local save. */
+  private async reconcileCreates(): Promise<void> {
+    const entries = this.store.listJournal('create_question').filter((j) => j.status === 'pending' || j.status === 'submitted');
+    for (const e of entries) {
+      const payload = JSON.parse(e.payloadJson) as { observation_start?: string };
+      const obsStart = payload.observation_start;
+      if (!obsStart) continue;
+      const questions = await this.chain.listQuestions(0, 100);
+      const match = questions.find((q) => q.observation_start === obsStart);
+      if (match) {
+        this.store.markConfirmed(e.dedupKey);
+      }
+    }
+  }
+
   /** One pass over all locally-tracked questions. */
   async tick(): Promise<TickReport> {
+    await this.reconcileCreates();
     const steps: StepResult[] = [];
     const questions = this.store.listQuestions();
     for (const q of questions) {
@@ -485,7 +530,9 @@ export class Runner {
 
   /**
    * Operator action: create a Question on-chain and persist it locally.
-   * `targetKey` is a stable identity (see schedule.ts target keys).
+   * The intent is journaled (keyed by targetKey) BEFORE broadcast so a restart
+   * never double-creates; reconciliation is by durable targetKey + pinned
+   * on-chain observation_start.
    */
   async createQuestion(params: {
     domain: Domain;
@@ -507,6 +554,25 @@ export class Runner {
       return { questionId: existingLocal.questionId, alreadyExists: true, error: null };
     }
     const participants = this.participantsFor(params.domain);
+    const dedupKey = `create_question:${params.targetKey}`;
+    const intent = this.store.upsertJournal({
+      dedupKey,
+      kind: 'create_question',
+      questionId: null,
+      accountId: this.config.operatorId,
+      payloadJson: JSON.stringify({ observation_start: params.observationStartNs.toString() }),
+    });
+    if (intent.alreadyConfirmed) {
+      // Recovered on a prior run but local row missing: rebuild from chain.
+      const questions = await this.chain.listQuestions(0, 100);
+      const match = questions.find((qq) => qq.observation_start === params.observationStartNs.toString());
+      if (match) {
+        const local = this.toLocalQuestion(match.question_id, params, participants);
+        this.store.saveQuestion(local, params.targetKey);
+        return { questionId: match.question_id, alreadyExists: true, error: null };
+      }
+      return { questionId: null, alreadyExists: false, error: 'create_question marked confirmed but question not found on chain' };
+    }
     const outcome = await this.chain.createQuestion(
       {
         text: params.text,
@@ -525,11 +591,28 @@ export class Runner {
       },
       this.config.operatorId,
     );
-    if (!outcome.success || typeof outcome.result !== 'number') {
-      return { questionId: null, alreadyExists: false, error: outcome.error ?? 'create_question returned no id' };
+    if (outcome.success && typeof outcome.result === 'number') {
+      if (outcome.txHash) this.store.markSubmitted(dedupKey, outcome.txHash);
+      this.store.markConfirmed(dedupKey);
+      const questionId = outcome.result as number;
+      const local = this.toLocalQuestion(questionId, params, participants);
+      this.store.saveQuestion(local, params.targetKey);
+      return { questionId, alreadyExists: false, error: null };
     }
-    const questionId = outcome.result as number;
-    const local: LocalQuestion = {
+    if (outcome.txHash) {
+      this.store.markSubmitted(dedupKey, outcome.txHash);
+    } else {
+      this.store.markFailed(dedupKey, outcome.error ?? 'create_question failed');
+    }
+    return { questionId: null, alreadyExists: false, error: outcome.error ?? 'create_question returned no id' };
+  }
+
+  private toLocalQuestion(
+    questionId: number,
+    params: { domain: Domain; text: string; eventDefinition: string; sourceJson: string; sourceLabel: string; openTimeNs: bigint; closeTimeNs: bigint; observationStartNs: bigint; observationEndNs: bigint; resolveTimeNs: bigint; resolveDeadlineNs: bigint; revealWindowNs: bigint },
+    participants: { agentId: AgentId; accountId: string }[],
+  ): LocalQuestion {
+    return {
       questionId,
       domain: params.domain,
       text: params.text,
@@ -548,7 +631,5 @@ export class Runner {
       minStake: this.config.minStakeYocto,
       participants,
     };
-    this.store.saveQuestion(local, params.targetKey);
-    return { questionId, alreadyExists: false, error: null };
   }
 }

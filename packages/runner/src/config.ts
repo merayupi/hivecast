@@ -14,11 +14,8 @@ import {
   DEFAULT_MIN_STAKE,
   KUDUS_LAT,
   KUDUS_LON,
-  WEATHER_MODEL,
   WEATHER_TIMEZONE,
 } from './schedule.js';
-
-export type ChainMode = 'rpc' | 'emulated';
 
 export interface RunnerConfig {
   networkId: string;
@@ -35,15 +32,14 @@ export interface RunnerConfig {
   agentAccounts: Record<AgentId, string>;
   binanceBaseUrl: string;
   openMeteoBaseUrl: string;
+  archiveBaseUrl: string;
   kudusLatitude: string;
   kudusLongitude: string;
   kudusTimezone: string;
-  weatherModel: string;
-  chainMode: ChainMode;
   /** In-flight gas reserve kept out of stake sizing (yoctoNEAR). */
   operationalGasReserveYocto: bigint;
   http: { enabled: boolean; host: string; port: number };
-  /** Deterministic credential override map for tests (secret keys injected, not files). */
+  /** Deterministic credential override map (secret keys injected, not files). */
   credentials?: Record<string, string>;
 }
 
@@ -118,11 +114,10 @@ export function loadConfig(path: string): RunnerConfig {
     agentAccounts: accounts,
     binanceBaseUrl: requireString(c.binanceBaseUrl ?? 'https://api.binance.com', 'binanceBaseUrl'),
     openMeteoBaseUrl: requireString(c.openMeteoBaseUrl ?? 'https://api.open-meteo.com', 'openMeteoBaseUrl'),
+    archiveBaseUrl: requireString(c.archiveBaseUrl ?? 'https://archive-api.open-meteo.com', 'archiveBaseUrl'),
     kudusLatitude: requireString(c.kudusLatitude ?? KUDUS_LAT, 'kudusLatitude'),
     kudusLongitude: requireString(c.kudusLongitude ?? KUDUS_LON, 'kudusLongitude'),
     kudusTimezone: requireString(c.kudusTimezone ?? WEATHER_TIMEZONE, 'kudusTimezone'),
-    weatherModel: requireString(c.weatherModel ?? WEATHER_MODEL, 'weatherModel'),
-    chainMode: c.chainMode === 'emulated' ? 'emulated' : 'rpc',
     operationalGasReserveYocto: c.operationalGasReserveYocto === undefined
       ? 50_000_000_000_000_000_000_000n // 0.05 NEAR
       : parseNonNegativeBigInt(c.operationalGasReserveYocto, 'operationalGasReserveYocto'),

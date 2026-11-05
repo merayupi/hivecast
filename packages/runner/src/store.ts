@@ -43,19 +43,52 @@ export interface ReservationRow {
 export class Store {
   private db: DatabaseSync;
 
-  constructor(path: string) {
+  constructor(path: string, networkId?: string, contractId?: string) {
     this.db = new DatabaseSync(path);
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.migrate();
+    if (networkId !== undefined && contractId !== undefined) {
+      try {
+        this.bind(networkId, contractId);
+      } catch (err) {
+        this.db.close();
+        throw err;
+      }
+    }
   }
 
   close(): void {
     this.db.close();
   }
 
+  /**
+   * Bind this database to one (network, contract). Refuses to open a database
+   * that belongs to a different deployment so a bare question_id can never be
+   * reused across contracts/networks.
+   */
+  bind(networkId: string, contractId: string): void {
+    const row = this.db
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get('binding') as { value: string } | undefined;
+    const expected = JSON.stringify({ networkId, contractId });
+    if (row && row.value !== expected) {
+      throw new Error(
+        `database is bound to ${row.value} but requested ${expected}; refusing to mix deployments`,
+      );
+    }
+    if (!row) {
+      this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('binding', expected);
+    }
+  }
+
   private migrate(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS questions (
         question_id INTEGER PRIMARY KEY,
         domain TEXT NOT NULL,
@@ -123,7 +156,30 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_journal_status ON journal(status);
       CREATE INDEX IF NOT EXISTS idx_forecasts_qid ON forecasts(question_id);
       CREATE INDEX IF NOT EXISTS idx_reservations_account ON reservations(account_id);
+
+      CREATE TABLE IF NOT EXISTS evidence (
+        question_id INTEGER NOT NULL,
+        stage TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (question_id, stage, hash)
+      );
     `);
+  }
+
+  /** Persist exact source evidence (raw response, request, model/grid/units/hash). */
+  saveEvidence(questionId: number, stage: 'input' | 'resolve', evidenceJson: string, hash: string): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO evidence (question_id, stage, evidence_json, hash, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(questionId, stage, evidenceJson, hash, Date.now());
+  }
+
+  getEvidence(questionId: number, stage: 'input' | 'resolve'): string[] {
+    const rows = this.db
+      .prepare('SELECT evidence_json FROM evidence WHERE question_id = ? AND stage = ? ORDER BY created_at ASC')
+      .all(questionId, stage) as { evidence_json: string }[];
+    return rows.map((r) => r.evidence_json);
   }
 
   // -------------------------------------------------------------------------

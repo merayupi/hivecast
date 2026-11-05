@@ -48,13 +48,9 @@ function failureMessageOf(status: unknown): string | null {
 }
 
 function isSuccess(status: unknown): boolean {
-  if (typeof status === 'object' && status !== null) {
-    if ('SuccessValue' in status) return true;
-    if ('Failure' in status) return false;
-  }
-  // A plain string status like "FINAL" without a nested object is treated as
-  // success only when there is no Failure marker.
-  return true;
+  // Only a proven SuccessValue is success. Unknown/missing status is NOT success.
+  if (typeof status === 'object' && status !== null && 'SuccessValue' in status) return true;
+  return false;
 }
 
 function extractError(status: unknown, receiptsOutcome: unknown): string | null {
@@ -72,7 +68,6 @@ function extractError(status: unknown, receiptsOutcome: unknown): string | null 
 }
 
 export class NearChainClient implements ChainClient {
-  readonly mode = 'rpc' as const;
   readonly contractId: string;
   private provider: JsonRpcProvider;
   private config: RunnerConfig;
@@ -108,6 +103,7 @@ export class NearChainClient implements ChainClient {
       contractId: this.contractId,
       method,
       args,
+      blockQuery: { finality: 'final' },
     });
     return result as T;
   }
@@ -124,7 +120,7 @@ export class NearChainClient implements ChainClient {
       const outcome = await account.signAndSendTransaction({
         receiverId: this.contractId,
         actions: [actions.functionCall(methodName, args, gas, deposit)],
-        waitUntil: 'INCLUDED_FINAL',
+        waitUntil: 'FINAL',
         throwOnFailure: false,
       });
       const status = 'status' in outcome ? outcome.status : undefined;
@@ -138,6 +134,17 @@ export class NearChainClient implements ChainClient {
           ? outcome.transaction.hash
           : null;
       const success = isSuccess(status);
+      if (!success && txHash !== null) {
+        // The transaction is included but the execution did not produce a proven
+        // SuccessValue. Distinguish a definitive failure from an unproven state.
+        const failErr = extractError(status, receiptsOutcome);
+        if (failErr !== null) {
+          return { txHash, success: false, result: null, error: failErr };
+        }
+        // Included but no SuccessValue observed: do NOT claim success, but keep
+        // the txHash so the journal can reconcile against the chain.
+        return { txHash, success: false, result: null, error: 'execution status unconfirmed (no SuccessValue)' };
+      }
       const error = success ? null : extractError(status, receiptsOutcome);
       let result: unknown = null;
       if (success && typeof status === 'object' && status !== null && 'SuccessValue' in status) {
@@ -153,8 +160,9 @@ export class NearChainClient implements ChainClient {
       }
       return { txHash, success, result, error };
     } catch (err) {
-      // Transaction was rejected before inclusion (RPC error, invalid nonce after
-      // retries, serialization, etc.). There is no tx hash to reconcile.
+      // Rejected before inclusion (RPC error, invalid nonce after retries, etc.).
+      // Uncertain network errors must not be treated as proof that nothing was
+      // included; the journal reconciles by re-verifying before any resend.
       return { txHash: null, success: false, result: null, error: (err as Error).message };
     }
   }

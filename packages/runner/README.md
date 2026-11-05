@@ -5,37 +5,32 @@ canonical commitment encoding, private SQLite persistence, the exact
 Binance/Open-Meteo source fetchers, and the public runtime interface the
 Forecast Access server (ticket #5) will consume.
 
-Nothing here is a mock-success stub: `EmulatedChainClient` is a faithful
-in-process re-implementation of the contract state machine (phase windows,
-one-commit-per-account, reveal hash matching, exactly-once withdrawal) used to
-exercise lifecycle/restart scenarios on any platform. Real chain proof uses
-`NearChainClient` against a corrected testnet deployment (tracked by #7).
+There is exactly **one** execution implementation: `NearChainClient` (real RPC
++ signing). A "real sandbox" is an actual `near-sandbox` RPC endpoint + WASM,
+reached by pointing `rpcUrl` at it — there is no in-process duplicate of the
+contract and no mock-success chain.
 
 ## Public entrypoint
 
 ```ts
 import {
-  Runner, LiveSourceProvider, Runtime, Store,
-  NearChainClient, EmulatedChainClient,
-  commitmentHash, generateSalt,
-  loadConfig, computePriceSchedule, computeWeatherSchedule,
-  sourceDefinition, questionText,
+  Runner, LiveSourceProvider, Runtime, Store, NearChainClient,
+  commitmentHash, generateSalt, loadConfig,
+  computePriceSchedule, computeWeatherSchedule,
+  sourceDefinition, questionText, parseSourceSpec,
   fetchCompletedCandles, fetchPriceResolution,
-  fetchWeatherForecast, fetchWeatherResolution,
+  fetchWeatherForecast, fetchWeatherResolution, fetchWeatherHistoryDay,
 } from '@hivecast/runner';
 ```
 
 ## Chain interface (`src/chain/types.ts`)
 
-The runner depends on a single `ChainClient`:
-
 ```ts
 interface ChainClient {
   readonly contractId: string;
-  readonly mode: 'rpc' | 'emulated';
-  nowNs(): bigint;                       // UTC ns (emulated clock or wall clock)
+  nowNs(): bigint;   // UTC ns wall clock
 
-  // Views (read-only, decimal strings for money/timestamps)
+  // Views (read-only; money/timestamps are decimal strings)
   getContractState(): Promise<ContractState>;
   getQuestion(id: number): Promise<QuestionView | null>;
   listQuestions(from: number, limit: number): Promise<QuestionView[]>;
@@ -50,8 +45,7 @@ interface ChainClient {
   viewAccountBalance(account: string): Promise<bigint>;
 
   // Mutations (sign + send). `signer` is an account id whose key is loaded
-  // from `credentialDirectory/<account>.json` (near CLI layout) or the
-  // in-memory `credentials` map supplied by the caller.
+  // from `credentialDirectory/<account>.json` (near CLI layout).
   createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome>;
   commit(qid: number, hash: string, stakeYocto: bigint, signer: string): Promise<CallOutcome>;
   publishSnapshot(qid: number, snapshotId: string, signer: string): Promise<CallOutcome>;
@@ -65,31 +59,32 @@ interface ChainClient {
 }
 ```
 
-> **Wire correction.** `create_question` takes `{ "spec": { …QuestionSpec } }`
-> (nested), per the actual `lib.rs` signature `create_question(&mut self,
-> spec: QuestionSpec)`. `NearChainClient` and `EmulatedChainClient` both send
-> this shape. The flattened shape shown in an earlier interface draft is wrong
-> and was corrected on the integration branch.
+**Execution semantics.** Transactions wait for `FINAL`; a mutation is `success`
+only when a proven `SuccessValue` is parsed. A definitive `Failure` is an
+error; an included transaction with no observed `SuccessValue` returns
+`success: false` with its `txHash` preserved so the journal reconciles by
+re-verifying against the chain before any resend. A rejected broadcast (no
+txHash) is `failed`, but the journal still reconciles before resending.
 
-## Runtime interface (`src/runtime.ts`)
+**Wire shape.** `create_question` takes `{ "spec": { …QuestionSpec } }`
+(nested), matching `lib.rs` `create_question(&mut self, spec: QuestionSpec)`.
 
-The seam the access server consumes. No secrets reach any of these surfaces:
+## Runtime interface (`src/runtime.ts`) — for ticket #5
 
 - `getPublicConfig()` → network/contract/operator/resolver/rpc/seed/mins. No
   credential dir, db path, keys, salts, or private forecasts.
 - `getPublicQuestion(id)`, `listPublicQuestions(from, limit)`,
   `listLeaderboard(id)` → finalized public chain views.
 - `getSnapshotDto(id)` → **private** frozen aggregate only
-  (`aggregateBps`, `totalStakeYocto`, `participantCount`, `snapshotId`). The
-  caller MUST authenticate the buyer (ticket #5) before returning this.
-  Per-agent probabilities and salts are never in the DTO.
+  (`aggregateBps`, `totalStakeYocto`, `participantCount`, `snapshotId`). Caller
+  MUST authenticate the buyer before returning it. Per-agent probabilities and
+  salts are never in the DTO.
 - `toOwnerSafeQuestionDto(q)`, `getLifecycleStatus(id)`,
   `listLocalQuestions()`, `resume()`, `tick()`.
 
 ## HTTP interface (`src/service.ts`, entry `src/service-entry.ts`)
 
-Deliberately narrow public endpoints. Administrative signing and private
-forecasts are never routed through HTTP:
+Public endpoints only; never administrative signing or private forecasts:
 
 | Route | Method | Response |
 | --- | --- | --- |
@@ -99,60 +94,60 @@ forecasts are never routed through HTTP:
 | `/questions/:id` | GET | `QuestionView` or 404 |
 | `/questions/:id/leaderboard` | GET | `{ question_id, entries: [{accountId, stake, revealed}] }` |
 
-## RPC interface
-
-- Views: NEAR `query` `call_function` with decimal-string args, JSON return.
-- Mutations: signed `FunctionCall` transactions, `waitUntil: INCLUDED_FINAL`,
-  `throwOnFailure: false`; success/failure is derived from the transaction
-  `status` (`SuccessValue` vs `Failure`) and parsed `SuccessValue` bytes.
-- Money (`stake`, `deposit`, `amount`, `price`) and timestamps cross the JSON
-  boundary as **decimal strings** — never `number`.
-
 ## SQLite schema (`src/store.ts`, `node:sqlite`)
 
-Private database (never committed). Tables:
+Private database (never committed). The database is **bound to one
+(network, contract)** at open and refuses to mix deployments, so a bare
+question_id cannot be reused across contracts. Tables:
 
+- `meta` — deployment binding.
 - `questions` — locally-tracked Questions (schedule, source, participants).
 - `forecasts` — forecast + CSPRNG salt, **written before the commit tx**.
-- `reservations` — per-(account, round) capital reservation.
-- `snapshots` — immutable Forecast Snapshots (aggregate + per-entry stake, but
-  entries are private; only the aggregate is ever serialized to a DTO).
+- `reservations` — per-(account, round) capital reservation (released once the
+  commit is confirmed, since the deposit then left the wallet).
+- `snapshots` — immutable Forecast Snapshots (CSPRNG id persisted once).
 - `journal` — idempotent send log (`pending` → `submitted` → `confirmed` /
-  `failed`), keyed by a stable dedup key so a restart reconciles against the
-  chain instead of re-sending or regenerating a salt.
-- `withdraw_attempts` — per-(account, amount) attempt counter so a failed
-  transfer (pending → restored) can be retried without double-withdrawing.
+  `failed`), keyed by a stable dedup key; intent is written **before**
+  broadcast and reconciled against the chain before any resend.
+- `evidence` — exact source evidence (raw response, request URL, model, grid,
+  timezone, units, hash) per input/resolve stage.
+- `withdraw_attempts` — per-(account, amount) attempt counter.
 
 ## Config (`hivecast.config.example.json`)
 
-Copy to `hivecast.config.json` (git-ignored) and fill account ids + credential
-directory. Keys are referenced by path only. `chainMode: "emulated"` needs no
-keys or network; `"rpc"` signs real testnet transactions.
+Strict JSON (no comments). Copy to `hivecast.config.json` (git-ignored) and
+fill account ids + credential directory. Keys are referenced by path only.
 
 ## Package scripts
 
 ```sh
-npm run test --workspace @hivecast/runner            # 25 tests (commitment/lifecycle/store/schedule/runtime)
+npm run test --workspace @hivecast/runner          # 22 tests (commitment/schedule/store/runtime seam)
 npm run typecheck --workspace @hivecast/runner
 npm run cli --workspace @hivecast/runner -- create-price <hourStartMs>
 npm run cli --workspace @hivecast/runner -- create-weather <YYYY-MM-DD>
 npm run cli --workspace @hivecast/runner -- tick
+npm run cli --workspace @hivecast/runner -- run      # autonomous scheduler (graceful stop)
 npm run cli --workspace @hivecast/runner -- status
 npm run cli --workspace @hivecast/runner -- snapshot <questionId>   # private aggregate
-npm run service --workspace @hivecast/runner                         # public HTTP
-npm run harness:testnet --workspace @hivecast/runner -- price        # real-chain lifecycle
+npm run service --workspace @hivecast/runner                          # public HTTP
+npm run harness:testnet --workspace @hivecast/runner -- price         # real-chain lifecycle
 ```
 
 ## Exact source semantics (`src/source.ts`)
 
 - **Price** — Binance spot `NEARUSDT`, interval `1h`, UTC. Only completed
-  candles (`closeTime < cutoff`); outcome `close > open` (ties/lower = NO),
-  compared with exact decimal strings.
-- **Weather** — Open-Meteo `ecmwf_ifs04` (IFS 9 km), Kudus
+  candles (`closeTime < cutoff`); resolution validates the target hour
+  (`openTime == target`, `closeTime == openTime+1h`) and completed status
+  before deriving `close > open` (ties/lower = NO) with exact decimal strings.
+- **Weather** — Open-Meteo `ecmwf_ifs` (ECMWF IFS 9 km; `ecmwf_ifs04` is a
+  0.04° cut and returns `null` — it is NOT used), Kudus
   (`-6.8049,110.8397`), `Asia/Jakarta`; forecast `precipitation_sum` fetched
-  before the cutoff (per-run publication time is not documented by Open-Meteo →
-  availability `inference`, disclosed in evidence); resolution from
-  `archive-api.open-meteo.com/v1/archive`; outcome `precipitation_sum >= 1.0 mm`.
-- **No silent substitution.** A missing/failed source waits until
-  `resolve_deadline`, then the Round is cancelled (timeout), never resolved
-  from a different model/instrument.
+  before the cutoff (per-run publication time not documented → availability
+  `inference`, disclosed); resolution from `archive-api.open-meteo.com/v1/archive`;
+  outcome `precipitation_sum >= 1.0 mm`.
+- **No silent substitution.** The model/instrument/grid/timezone is parsed from
+  the Question's pinned on-chain `source_json` (`parseSourceSpec`), never from
+  mutable global config after creation. A missing source waits until
+  `resolve_deadline`, then the Round is cancelled; missing history days are
+  recorded in the input disclosure, not silently dropped. Every fetch persists
+  exact evidence (raw response + hash + model/grid/units/timestamp).

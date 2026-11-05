@@ -21,7 +21,7 @@ export const WIB_OFFSET_MS = 7 * MS_PER_HOUR; // UTC+7, no DST
 
 export const PRICE_INSTRUMENT = 'NEARUSDT';
 export const PRICE_INTERVAL = '1h';
-export const WEATHER_MODEL = 'ecmwf_ifs04'; // ECMWF IFS 9 km (~0.4°)
+export const WEATHER_MODEL = 'ecmwf_ifs'; // ECMWF IFS 9 km (~0.4°); ecmwf_ifs04 is a 0.04° cut, NOT 9 km
 export const KUDUS_LAT = '-6.8049';
 export const KUDUS_LON = '110.8397';
 export const WEATHER_TIMEZONE = 'Asia/Jakarta';
@@ -165,4 +165,61 @@ export function priceTargetLabel(hourStartMs: number): string {
 /** ISO date label (WIB) for a weather target. */
 export function weatherTargetLabel(date: string): string {
   return date;
+}
+
+// ---------------------------------------------------------------------------
+// Per-Question pinned source spec (parsed from the on-chain sourceJson)
+// ---------------------------------------------------------------------------
+
+export interface PriceSourceSpec {
+  kind: 'price';
+  instrument: string;
+  interval: string;
+}
+
+export interface WeatherSourceSpec {
+  kind: 'weather';
+  model: string;
+  latitude: string;
+  longitude: string;
+  timezone: string;
+  thresholdMm: string;
+}
+
+export type SourceSpec = PriceSourceSpec | WeatherSourceSpec;
+
+/**
+ * Parse the pinned sourceJson stored on-chain at creation. The runner resolves
+ * from THIS, never from mutable global config — so a Question keeps its exact
+ * instrument/model/grid after creation even if defaults change later.
+ */
+export function parseSourceSpec(sourceJson: string): SourceSpec {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(sourceJson);
+  } catch {
+    throw new Error(`invalid sourceJson: ${sourceJson}`);
+  }
+  if (typeof raw !== 'object' || raw === null || !('kind' in raw)) {
+    throw new Error('sourceJson missing kind');
+  }
+  const o = raw as Record<string, unknown>;
+  if (o.kind === 'price') {
+    return {
+      kind: 'price',
+      instrument: String(o.instrument ?? PRICE_INSTRUMENT),
+      interval: String(o.interval ?? PRICE_INTERVAL),
+    };
+  }
+  if (o.kind === 'weather') {
+    return {
+      kind: 'weather',
+      model: String(o.model ?? WEATHER_MODEL),
+      latitude: String(o.latitude ?? KUDUS_LAT),
+      longitude: String(o.longitude ?? KUDUS_LON),
+      timezone: String(o.timezone ?? WEATHER_TIMEZONE),
+      thresholdMm: String(o.threshold_mm ?? WEATHER_THRESHOLD_MM),
+    };
+  }
+  throw new Error(`unknown source kind: ${String(o.kind)}`);
 }

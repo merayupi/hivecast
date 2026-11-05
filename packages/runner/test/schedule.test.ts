@@ -85,7 +85,7 @@ test('weather source pins Open-Meteo IFS 9km Kudus with 1.0mm threshold', () => 
   assert.equal(parsed.longitude, '110.8397');
   assert.equal(parsed.timezone, 'Asia/Jakarta');
   assert.equal(parsed.threshold_mm, WEATHER_THRESHOLD_MM);
-  assert.match(def.label, /Open-Meteo ecmwf_ifs04/);
+  assert.match(def.label, /Open-Meteo ecmwf_ifs/);
 });
 
 test('question text names the instrument and threshold', () => {

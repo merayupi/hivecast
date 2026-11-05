@@ -1,14 +1,11 @@
 /**
  * ChainClient — the runner's only dependency on chain state and mutation.
  *
- * Two implementations exist:
- *   - `NearChainClient`  : real NEAR RPC + ed25519 signing (production).
- *   - `EmulatedChainClient` : an in-process, faithful re-implementation of the
- *     contract's public state machine, used as the cross-platform sandbox for
- *     lifecycle/restart scenarios. It is NOT a mock-success stub: it enforces
- *     phase windows, one-commit-per-account, reveal hash matching, exactly-once
- *     withdrawal via pending→delivered/restored, and can be told to fail
- *     transfers.
+ * The single execution implementation is `NearChainClient` (real NEAR RPC +
+ * ed25519 signing). A "real sandbox" is an actual `near-sandbox` RPC endpoint +
+ * WASM, reachable by pointing `rpcUrl` at it; there is no in-process duplicate
+ * of the contract. Transaction finality waits for `FINAL` and only a proven
+ * `SuccessValue` is treated as success.
  */
 
 import type {
@@ -48,8 +45,7 @@ export interface QuestionSpecArgs {
 
 export interface ChainClient {
   readonly contractId: string;
-  readonly mode: 'rpc' | 'emulated';
-  /** Current time in UTC ns (emulated clock for sandbox, wall clock otherwise). */
+  /** Current time in UTC ns (wall clock). */
   nowNs(): bigint;
 
   // Views

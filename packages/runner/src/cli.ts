@@ -6,10 +6,8 @@
  * interface; it never signs or exposes private forecasts.
  */
 
-import { EmulatedChainClient, NearChainClient } from './chain/index.js';
-import type { ChainClient } from './chain/types.js';
+import { NearChainClient } from './chain/index.js';
 import { loadConfig } from './config.js';
-import type { RunnerConfig } from './config.js';
 import { Runner } from './runner.js';
 import { Runtime } from './runtime.js';
 import {
@@ -21,20 +19,14 @@ import {
   sourceDefinition,
   weatherTargetKey,
   weatherTargetLabel,
+  wibDateOfUtcMs,
 } from './schedule.js';
 import { Store } from './store.js';
 
-function buildChain(config: RunnerConfig): ChainClient {
-  if (config.chainMode === 'emulated') {
-    return new EmulatedChainClient(config.contractId, { operator: config.operatorId });
-  }
-  return new NearChainClient(config);
-}
-
 function buildRuntime() {
   const config = loadConfig(process.env.HIVECAST_CONFIG ?? 'hivecast.config.json');
-  const chain = buildChain(config);
-  const store = new Store(config.databasePath);
+  const chain = new NearChainClient(config);
+  const store = new Store(config.databasePath, config.networkId, config.contractId);
   const runner = new Runner(config, chain, store);
   const runtime = new Runtime(config, chain, store, runner);
   return { config, chain, store, runner, runtime };
@@ -47,6 +39,7 @@ function usage(): never {
       '  hivecast-runner create-price <hourStartMs>     create a price Question for a UTC hour',
       '  hivecast-runner create-weather <date>          create a weather Question for a WIB date',
       '  hivecast-runner tick                           advance all tracked Questions once',
+      '  hivecast-runner run                            autonomous scheduler (watch + tick, graceful stop)',
       '  hivecast-runner status                         list lifecycle status',
       '  hivecast-runner snapshot <questionId>          print frozen snapshot aggregate (private)',
       '',
@@ -128,14 +121,89 @@ async function tick(): Promise<void> {
   store.close();
 }
 
+/** Autonomous scheduler: idempotent Question creation + lifecycle tick loop. */
+async function run(): Promise<void> {
+  const { config, runner, store } = buildRuntime();
+  process.stdout.write(`[run] started contract=${config.contractId} network=${config.networkId} poll=${config.pollIntervalMs}ms\n`);
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    process.stdout.write('[run] stopping…\n');
+    store.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+
+  // Create the next price + weather Questions once (idempotent by targetKey),
+  // then loop the lifecycle.
+  const now = Date.now();
+  const nextHour = Math.floor(now / 3_600_000) * 3_600_000 + 3_600_000;
+  const priceSched = computePriceSchedule(nextHour);
+  const priceLabel = priceTargetLabel(nextHour);
+  const priceSrc = sourceDefinition('price', priceLabel);
+  await runner.createQuestion({
+    domain: 'price',
+    text: questionText('price', priceLabel),
+    eventDefinition: priceSrc.label,
+    sourceJson: priceSrc.json,
+    sourceLabel: priceSrc.label,
+    targetKey: priceTargetKey(nextHour),
+    openTimeNs: priceSched.openTimeNs,
+    closeTimeNs: priceSched.closeTimeNs,
+    observationStartNs: priceSched.observationStartNs,
+    observationEndNs: priceSched.observationEndNs,
+    resolveTimeNs: priceSched.resolveTimeNs,
+    resolveDeadlineNs: priceSched.resolveDeadlineNs,
+    revealWindowNs: priceSched.revealWindowNs,
+  });
+
+  const date = wibDateOfUtcMs(now + 7 * 3_600_000 + 86_400_000);
+  const wibMidnight = Date.parse(`${date}T00:00:00+07:00`);
+  const weatherSched = computeWeatherSchedule(wibMidnight);
+  const weatherSrc = sourceDefinition('weather', date);
+  await runner.createQuestion({
+    domain: 'weather',
+    text: questionText('weather', date),
+    eventDefinition: weatherSrc.label,
+    sourceJson: weatherSrc.json,
+    sourceLabel: weatherSrc.label,
+    targetKey: weatherTargetKey(date),
+    openTimeNs: weatherSched.openTimeNs,
+    closeTimeNs: weatherSched.closeTimeNs,
+    observationStartNs: weatherSched.observationStartNs,
+    observationEndNs: weatherSched.observationEndNs,
+    resolveTimeNs: weatherSched.resolveTimeNs,
+    resolveDeadlineNs: weatherSched.resolveDeadlineNs,
+    revealWindowNs: weatherSched.revealWindowNs,
+  });
+
+  while (!stopped) {
+    try {
+      const report = await runner.tick();
+      for (const step of report.steps) {
+        if (step.sent || step.error) {
+          process.stdout.write(`[run] ${step.kind} q=${step.questionId} acct=${step.accountId ?? '-'} ${step.reason}${step.error ? ` err=${step.error}` : ''}\n`);
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`[run] tick error: ${(err as Error).message}\n`);
+    }
+    await new Promise((r) => setTimeout(r, config.pollIntervalMs));
+  }
+}
+
 async function status(): Promise<void> {
   const { runtime, store } = buildRuntime();
   const questions = await runtime.listLocalQuestions();
   for (const q of questions) {
     const s = await runtime.getLifecycleStatus(q.questionId);
-    process.stdout.write(
-      `#${q.questionId} [${s?.domain}] phase=${s?.phase} snapshot=${s?.snapshotReady} outcome=${s?.outcome ?? 'null'} participants=${s?.participantCount}\n`,
-    );
+    if (!s) continue;
+    const chain = s.chain
+      ? `phase=${s.chain.phase} snapshot=${s.chain.snapshotReady} outcome=${s.chain.outcome ?? 'null'} participants=${s.chain.participantCount}`
+      : 'chain=unavailable';
+    process.stdout.write(`#${q.questionId} [${s.domain}] ${chain}\n`);
   }
   store.close();
 }
@@ -164,6 +232,8 @@ async function main(): Promise<void> {
       return createWeather(rest);
     case 'tick':
       return tick();
+    case 'run':
+      return run();
     case 'status':
       return status();
     case 'snapshot':

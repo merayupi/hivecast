@@ -28,25 +28,29 @@ export interface SnapshotDto {
   participantCount: number;
 }
 
-/** Owner-safe question DTO (public + local metadata, no salts/forecasts). */
+/** Owner-safe question DTO. Chain-backed fields are `null` when the view is
+ * unavailable (explicit missing, never fabricated). */
 export interface QuestionDto {
   questionId: number;
   domain: LocalQuestion['domain'];
   text: string;
   eventDefinition: string;
   sourceLabel: string;
-  phase: Phase;
-  snapshotReady: boolean;
-  snapshotId: string | null;
-  outcome: boolean | null;
-  participantCount: number;
-  buyerCount: number;
-  totalStake: string;
-  feePool: string;
-  minStake: string;
-  accessPrice: string;
-  observationStart: string;
-  observationEnd: string;
+  /** `null` means the on-chain view is unavailable; not a fabricated phase. */
+  chain: {
+    phase: Phase;
+    snapshotReady: boolean;
+    snapshotId: string | null;
+    outcome: boolean | null;
+    participantCount: number;
+    buyerCount: number;
+    totalStake: string;
+    feePool: string;
+    minStake: string;
+    accessPrice: string;
+    observationStart: string;
+    observationEnd: string;
+  } | null;
 }
 
 export interface JournalSummary {
@@ -60,12 +64,15 @@ export interface JournalSummary {
 export interface LifecycleStatus {
   questionId: number;
   domain: LocalQuestion['domain'];
-  phase: Phase;
-  snapshotReady: boolean;
-  snapshotId: string | null;
-  outcome: boolean | null;
-  participantCount: number;
-  buyerCount: number;
+  /** `null` means the on-chain view is unavailable; not a fabricated phase. */
+  chain: {
+    phase: Phase;
+    snapshotReady: boolean;
+    snapshotId: string | null;
+    outcome: boolean | null;
+    participantCount: number;
+    buyerCount: number;
+  } | null;
   journal: JournalSummary[];
 }
 
@@ -159,24 +166,36 @@ export class Runtime {
 
   async toOwnerSafeQuestionDto(q: LocalQuestion): Promise<QuestionDto> {
     const view = await this.chain.getQuestion(q.questionId);
+    if (!view) {
+      return {
+        questionId: q.questionId,
+        domain: q.domain,
+        text: q.text,
+        eventDefinition: q.eventDefinition,
+        sourceLabel: q.sourceLabel,
+        chain: null,
+      };
+    }
     return {
       questionId: q.questionId,
       domain: q.domain,
       text: q.text,
       eventDefinition: q.eventDefinition,
       sourceLabel: q.sourceLabel,
-      phase: view?.phase ?? 'open',
-      snapshotReady: view?.snapshot_ready ?? false,
-      snapshotId: view?.snapshot_id ?? null,
-      outcome: view?.outcome ?? null,
-      participantCount: view?.participant_count ?? 0,
-      buyerCount: view?.buyer_count ?? 0,
-      totalStake: view?.total_stake ?? '0',
-      feePool: view?.fee_pool ?? '0',
-      minStake: view?.min_stake ?? '0',
-      accessPrice: view?.access_price ?? '0',
-      observationStart: view?.observation_start ?? q.observationStartNs.toString(),
-      observationEnd: view?.observation_end ?? q.observationEndNs.toString(),
+      chain: {
+        phase: view.phase,
+        snapshotReady: view.snapshot_ready,
+        snapshotId: view.snapshot_id,
+        outcome: view.outcome,
+        participantCount: view.participant_count,
+        buyerCount: view.buyer_count,
+        totalStake: view.total_stake,
+        feePool: view.fee_pool,
+        minStake: view.min_stake,
+        accessPrice: view.access_price,
+        observationStart: view.observation_start,
+        observationEnd: view.observation_end,
+      },
     };
   }
 
@@ -201,12 +220,16 @@ export class Runtime {
     return {
       questionId,
       domain: local.domain,
-      phase: view?.phase ?? 'open',
-      snapshotReady: view?.snapshot_ready ?? false,
-      snapshotId: view?.snapshot_id ?? null,
-      outcome: view?.outcome ?? null,
-      participantCount: view?.participant_count ?? 0,
-      buyerCount: view?.buyer_count ?? 0,
+      chain: view
+        ? {
+            phase: view.phase,
+            snapshotReady: view.snapshot_ready,
+            snapshotId: view.snapshot_id,
+            outcome: view.outcome,
+            participantCount: view.participant_count,
+            buyerCount: view.buyer_count,
+          }
+        : null,
       journal,
     };
   }
