@@ -121,7 +121,7 @@ fill account ids + credential directory. Keys are referenced by path only.
 ## Package scripts
 
 ```sh
-npm run test --workspace @hivecast/runner          # 22 tests (commitment/schedule/store/runtime seam)
+npm run test --workspace @hivecast/runner          # 5 seam tests (CLI/HTTP/real RPC)
 npm run typecheck --workspace @hivecast/runner
 npm run cli --workspace @hivecast/runner -- create-price <hourStartMs>
 npm run cli --workspace @hivecast/runner -- create-weather <YYYY-MM-DD>
@@ -137,8 +137,9 @@ npm run harness:testnet --workspace @hivecast/runner -- price         # real-cha
 
 - **Price** — Binance spot `NEARUSDT`, interval `1h`, UTC. Only completed
   candles (`closeTime < cutoff`); resolution validates the target hour
-  (`openTime == target`, `closeTime == openTime+1h`) and completed status
-  before deriving `close > open` (ties/lower = NO) with exact decimal strings.
+  (`openTime == target`, `closeTime == openTime + 1h − 1ms`, the INCLUSIVE
+  Binance interval end) and completed status before deriving `close > open`
+  (ties/lower = NO) with exact decimal strings.
 - **Weather** — Open-Meteo `ecmwf_ifs` (ECMWF IFS 9 km; `ecmwf_ifs04` is a
   0.04° cut and returns `null` — it is NOT used), Kudus
   (`-6.8049,110.8397`), `Asia/Jakarta`; forecast `precipitation_sum` fetched
