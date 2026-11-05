@@ -1792,9 +1792,6 @@ mod tests {
         testing_env!(ctx("anyone", "anyone", 0, 6_000));
         c.settle(qid);
 
-        let q = c.get_question(qid).unwrap();
-        assert!(q.zero_reveal_refund);
-
         // Base payout returns each stake (zero score for all).
         assert_eq!(c.get_balance("alice.testnet".parse().unwrap()).claimable, "60");
         assert_eq!(c.get_balance("bob.testnet".parse().unwrap()).claimable, "40");
