@@ -7,7 +7,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { Account, JsonRpcProvider, actions, teraToGas } from 'near-api-js';
+import { createHash } from 'node:crypto';
+import { Account, JsonRpcProvider, SignedTransaction, actions, baseEncode, teraToGas } from 'near-api-js';
 import type { KeyPairString } from 'near-api-js';
 import { AccountDoesNotExistError, AccessKeyDoesNotExistError } from 'near-api-js/rpc-errors';
 import type { RunnerConfig } from '../config.js';
@@ -19,10 +20,14 @@ import type {
   PendingWithdrawalView,
   QuestionView,
 } from '../types.js';
-import type { CallOutcome, ChainClient, QuestionSpecArgs } from './types.js';
+import type { CallOutcome, ChainClient, PreparedCall, QuestionSpecArgs } from './types.js';
 
 const DEFAULT_GAS = teraToGas('50');
 const SETTLE_GAS = teraToGas('200');
+
+function decodeSignedTransactionBytes(base64: string): SignedTransaction {
+  return SignedTransaction.decode(new Uint8Array(Buffer.from(base64, 'base64')));
+}
 
 interface Credential {
   account_id: string;
@@ -117,63 +122,87 @@ export class NearChainClient implements ChainClient {
     return result as T;
   }
 
+  /** Build + sign a contract call WITHOUT broadcasting. */
+  async prepareCall(
+    methodName: string,
+    args: Record<string, unknown>,
+    signer: string,
+    deposit: bigint,
+    gas: bigint = DEFAULT_GAS,
+  ): Promise<PreparedCall> {
+    const account = this.account(signer);
+    const signedTx = await account.createSignedTransaction({
+      receiverId: this.contractId,
+      actions: [actions.functionCall(methodName, args, gas, deposit)],
+    });
+    const bytes = signedTx.encode();
+    // NEAR transaction hash = base58(sha256(signed transaction bytes)).
+    const txHash = baseEncode(createHash('sha256').update(bytes).digest());
+    const nonce = String(signedTx.transaction.nonce);
+    return {
+      signedBytesBase64: Buffer.from(bytes).toString('base64'),
+      txHash,
+      nonce,
+    };
+  }
+
+  /** Broadcast a previously prepared (signed) transaction and await FINAL. */
+  async broadcastCall(signedBytesBase64: string): Promise<CallOutcome> {
+    const signedTx = decodeSignedTransactionBytes(signedBytesBase64);
+    try {
+      const outcome = await this.provider.sendTransactionUntil(signedTx, 'FINAL');
+      return this.parseOutcome(outcome as unknown as Record<string, unknown>);
+    } catch (err) {
+      // Uncertain network error: inclusion status is unknown; the runner will
+      // rebroadcast the SAME signed transaction, never re-sign a fresh one.
+      return { txHash: null, success: false, result: null, error: (err as Error).message, status: 'uncertain' };
+    }
+  }
+
+  private parseOutcome(outcome: Record<string, unknown>): CallOutcome {
+    const status = 'status' in outcome ? outcome.status : undefined;
+    const receiptsOutcome = 'receipts_outcome' in outcome ? outcome.receipts_outcome : undefined;
+    const txHash =
+      'transaction' in outcome &&
+      typeof outcome.transaction === 'object' &&
+      outcome.transaction !== null &&
+      'hash' in outcome.transaction &&
+      typeof outcome.transaction.hash === 'string'
+        ? outcome.transaction.hash
+        : null;
+    const success = isSuccess(status);
+    const failErr = extractError(status, receiptsOutcome);
+    let result: unknown = null;
+    if (success && typeof status === 'object' && status !== null && 'SuccessValue' in status) {
+      const sv = status.SuccessValue;
+      if (typeof sv === 'string' && sv.length > 0) {
+        const bytes = Buffer.from(sv, 'base64').toString('utf8');
+        try {
+          result = JSON.parse(bytes);
+        } catch {
+          result = bytes;
+        }
+      }
+    }
+    if (success) {
+      return { txHash, success: true, result, error: null, status: 'success' };
+    }
+    if (failErr !== null) {
+      return { txHash, success: false, result: null, error: failErr, status: 'failure' };
+    }
+    // Included but no proven SuccessValue/Failure → uncertain.
+    return { txHash, success: false, result: null, error: 'execution status unconfirmed (no SuccessValue)', status: 'uncertain' };
+  }
+
   private async call(
     methodName: string,
-    args: Record<string, unknown> | Uint8Array,
+    args: Record<string, unknown>,
     signer: string,
     deposit: bigint,
     gas: bigint = DEFAULT_GAS,
   ): Promise<CallOutcome> {
-    const account = this.account(signer);
-    try {
-      const outcome = await account.signAndSendTransaction({
-        receiverId: this.contractId,
-        actions: [actions.functionCall(methodName, args, gas, deposit)],
-        waitUntil: 'FINAL',
-        throwOnFailure: false,
-      });
-      const status = 'status' in outcome ? outcome.status : undefined;
-      const receiptsOutcome = 'receipts_outcome' in outcome ? outcome.receipts_outcome : undefined;
-      const txHash =
-        'transaction' in outcome &&
-        typeof outcome.transaction === 'object' &&
-        outcome.transaction !== null &&
-        'hash' in outcome.transaction &&
-        typeof outcome.transaction.hash === 'string'
-          ? outcome.transaction.hash
-          : null;
-      const success = isSuccess(status);
-      if (!success && txHash !== null) {
-        // The transaction is included but the execution did not produce a proven
-        // SuccessValue. Distinguish a definitive failure from an unproven state.
-        const failErr = extractError(status, receiptsOutcome);
-        if (failErr !== null) {
-          return { txHash, success: false, result: null, error: failErr };
-        }
-        // Included but no SuccessValue observed: do NOT claim success, but keep
-        // the txHash so the journal can reconcile against the chain.
-        return { txHash, success: false, result: null, error: 'execution status unconfirmed (no SuccessValue)' };
-      }
-      const error = success ? null : extractError(status, receiptsOutcome);
-      let result: unknown = null;
-      if (success && typeof status === 'object' && status !== null && 'SuccessValue' in status) {
-        const sv = status.SuccessValue;
-        if (typeof sv === 'string' && sv.length > 0) {
-          const bytes = Buffer.from(sv, 'base64').toString('utf8');
-          try {
-            result = JSON.parse(bytes);
-          } catch {
-            result = bytes;
-          }
-        }
-      }
-      return { txHash, success, result, error };
-    } catch (err) {
-      // Rejected before inclusion (RPC error, invalid nonce after retries, etc.).
-      // Uncertain network errors must not be treated as proof that nothing was
-      // included; the journal reconciles by re-verifying before any resend.
-      return { txHash: null, success: false, result: null, error: (err as Error).message };
-    }
+    const prepared = await this.prepareCall(methodName, args, signer, deposit, gas);
+    return this.broadcastCall(prepared.signedBytesBase64);
   }
 
   getContractState(): Promise<ContractState> {

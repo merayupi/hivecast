@@ -209,7 +209,64 @@ export class Store {
       );
 
       CREATE INDEX IF NOT EXISTS idx_access_challenges_account ON access_challenges(account_id);
+
+      CREATE TABLE IF NOT EXISTS signed_txs (
+        dedup_key TEXT PRIMARY KEY,
+        signed_bytes_base64 TEXT NOT NULL,
+        tx_hash TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS retired_rounds (
+        question_id INTEGER PRIMARY KEY,
+        phase TEXT NOT NULL,
+        retired_at INTEGER NOT NULL
+      );
     `);
+  }
+
+  // -------------------------------------------------------------------------
+  // Retired (terminal) round markers — durable, no time heuristic
+  // -------------------------------------------------------------------------
+
+  /** Mark a Round retired once its FINALIZED terminal phase was actually observed. */
+  markRetired(questionId: number, phase: 'settled' | 'cancelled'): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO retired_rounds (question_id, phase, retired_at) VALUES (?, ?, ?)')
+      .run(questionId, phase, Date.now());
+  }
+
+  isRetired(questionId: number): boolean {
+    const row = this.db
+      .prepare('SELECT 1 AS x FROM retired_rounds WHERE question_id = ?')
+      .get(questionId);
+    return row !== undefined;
+  }
+
+  // -------------------------------------------------------------------------
+  // Prepared signed transactions (persisted BEFORE broadcast for crash safety)
+  // -------------------------------------------------------------------------
+
+  saveSignedTx(dedupKey: string, signedBytesBase64: string, txHash: string, nonce: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO signed_txs (dedup_key, signed_bytes_base64, tx_hash, nonce, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(dedupKey, signedBytesBase64, txHash, nonce, Date.now());
+  }
+
+  getSignedTx(dedupKey: string): { signedBytesBase64: string; txHash: string; nonce: string } | null {
+    const row = this.db
+      .prepare('SELECT signed_bytes_base64, tx_hash, nonce FROM signed_txs WHERE dedup_key = ?')
+      .get(dedupKey) as { signed_bytes_base64: string; tx_hash: string; nonce: string } | undefined;
+    if (!row) return null;
+    return { signedBytesBase64: row.signed_bytes_base64, txHash: row.tx_hash, nonce: row.nonce };
+  }
+
+  deleteSignedTx(dedupKey: string): void {
+    this.db.prepare('DELETE FROM signed_txs WHERE dedup_key = ?').run(dedupKey);
   }
 
   /** Persist exact source evidence (raw response, request, model/grid/units/hash). */

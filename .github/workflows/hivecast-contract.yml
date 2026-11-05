@@ -34,18 +34,25 @@ jobs:
       # Compile every test target first so native sandbox type errors surface
       # even if the lib test body has an unrelated failure.
       - name: Compile all test targets (no-run)
+        id: compile_targets
         working-directory: contracts/hivecast
         run: cargo test --no-run
 
       - name: Run public-interface unit tests (near-sdk mock VM)
+        id: unit_tests
         working-directory: contracts/hivecast
         run: cargo test --lib
 
+      # Run the real sandbox lifecycle regardless of the unit-test outcome,
+      # as long as the test targets compiled. Any earlier test failure still
+      # fails the whole workflow (no continue-on-error/skip).
       - name: Run real near-sandbox lifecycle tests
+        if: steps.compile_targets.outcome == 'success' && !cancelled()
         working-directory: contracts/hivecast
         run: cargo test --test sandbox -- --nocapture
 
       - name: Upload WASM artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: hivecast.wasm

@@ -24,6 +24,21 @@ export interface CallOutcome {
   /** Parsed JSON return value (e.g. question_id from create_question). */
   result: unknown;
   error: string | null;
+  /**
+   * 'success' — proven SuccessValue; 'failure' — included and definitively
+   * failed; 'uncertain' — included with no proven SuccessValue/Failure, or a
+   * network error whose inclusion status is unknown. `uncertain` must NOT be
+   * treated as "nothing happened" (see the runner's rebroadcast-same-signed-tx
+   * reconciliation).
+   */
+  status: 'success' | 'failure' | 'uncertain';
+}
+
+/** A prepared, signed-but-not-broadcast transaction. */
+export interface PreparedCall {
+  signedBytesBase64: string;
+  txHash: string;
+  nonce: string;
 }
 
 /** `create_question` wire args (decimal strings per the contract). */
@@ -70,6 +85,23 @@ export interface ChainClient {
    * a silently-suppressed "no proof".
    */
   viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null>;
+
+  /**
+   * Build + sign a contract call WITHOUT broadcasting. Persisting its bytes
+   * before `broadcastCall` makes every mutation crash-safe: while the outcome
+   * is uncertain, the runner rebroadcasts THIS same signed transaction instead
+   * of re-signing (which could double-spend a fresh nonce).
+   */
+  prepareCall(
+    methodName: string,
+    args: Record<string, unknown>,
+    signer: string,
+    deposit: bigint,
+    gas?: bigint,
+  ): Promise<PreparedCall>;
+
+  /** Broadcast a previously prepared (signed) transaction. */
+  broadcastCall(signedBytesBase64: string): Promise<CallOutcome>;
 
   // Mutations (sign + send). `signer` is an account id.
   createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome>;

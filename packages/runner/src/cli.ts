@@ -121,66 +121,80 @@ async function tick(): Promise<void> {
   store.close();
 }
 
-/** Autonomous scheduler: idempotent Question creation + lifecycle tick loop. */
+/** Idempotent: ensure the price Question for the given UTC hour exists. */
+async function ensurePriceQuestion(runner: Runner, hourStartMs: number): Promise<void> {
+  const schedule = computePriceSchedule(hourStartMs);
+  const label = priceTargetLabel(hourStartMs);
+  const src = sourceDefinition('price', label);
+  await runner.createQuestion({
+    domain: 'price',
+    text: questionText('price', label),
+    eventDefinition: src.label,
+    sourceJson: src.json,
+    sourceLabel: src.label,
+    targetKey: priceTargetKey(hourStartMs),
+    openTimeNs: schedule.openTimeNs,
+    closeTimeNs: schedule.closeTimeNs,
+    observationStartNs: schedule.observationStartNs,
+    observationEndNs: schedule.observationEndNs,
+    resolveTimeNs: schedule.resolveTimeNs,
+    resolveDeadlineNs: schedule.resolveDeadlineNs,
+    revealWindowNs: schedule.revealWindowNs,
+  });
+}
+
+/** Idempotent: ensure the weather Question for the given WIB date exists. */
+async function ensureWeatherQuestion(runner: Runner, date: string): Promise<void> {
+  const wibMidnight = Date.parse(`${date}T00:00:00+07:00`);
+  const schedule = computeWeatherSchedule(wibMidnight);
+  const src = sourceDefinition('weather', date);
+  await runner.createQuestion({
+    domain: 'weather',
+    text: questionText('weather', date),
+    eventDefinition: src.label,
+    sourceJson: src.json,
+    sourceLabel: src.label,
+    targetKey: weatherTargetKey(date),
+    openTimeNs: schedule.openTimeNs,
+    closeTimeNs: schedule.closeTimeNs,
+    observationStartNs: schedule.observationStartNs,
+    observationEndNs: schedule.observationEndNs,
+    resolveTimeNs: schedule.resolveTimeNs,
+    resolveDeadlineNs: schedule.resolveDeadlineNs,
+    revealWindowNs: schedule.revealWindowNs,
+  });
+}
+
+/** Autonomous scheduler: idempotent Question scheduling + lifecycle tick loop. */
 async function run(): Promise<void> {
   const { config, runner, store } = buildRuntime();
   process.stdout.write(`[run] started contract=${config.contractId} network=${config.networkId} poll=${config.pollIntervalMs}ms\n`);
-  let stopped = false;
+
+  let stopping = false;
+  let inFlight: Promise<unknown> = Promise.resolve();
   const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    process.stdout.write('[run] stopping…\n');
-    store.close();
-    process.exit(0);
+    if (stopping) return;
+    stopping = true;
+    process.stdout.write('[run] draining in-flight work before shutdown…\n');
+    // Wait for the current tick/broadcast to finish and persist, then close.
+    inFlight.finally(() => {
+      store.close();
+      process.exit(0);
+    });
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 
-  // Create the next price + weather Questions once (idempotent by targetKey),
-  // then loop the lifecycle.
-  const now = Date.now();
-  const nextHour = Math.floor(now / 3_600_000) * 3_600_000 + 3_600_000;
-  const priceSched = computePriceSchedule(nextHour);
-  const priceLabel = priceTargetLabel(nextHour);
-  const priceSrc = sourceDefinition('price', priceLabel);
-  await runner.createQuestion({
-    domain: 'price',
-    text: questionText('price', priceLabel),
-    eventDefinition: priceSrc.label,
-    sourceJson: priceSrc.json,
-    sourceLabel: priceSrc.label,
-    targetKey: priceTargetKey(nextHour),
-    openTimeNs: priceSched.openTimeNs,
-    closeTimeNs: priceSched.closeTimeNs,
-    observationStartNs: priceSched.observationStartNs,
-    observationEndNs: priceSched.observationEndNs,
-    resolveTimeNs: priceSched.resolveTimeNs,
-    resolveDeadlineNs: priceSched.resolveDeadlineNs,
-    revealWindowNs: priceSched.revealWindowNs,
-  });
-
-  const date = wibDateOfUtcMs(now + 7 * 3_600_000 + 86_400_000);
-  const wibMidnight = Date.parse(`${date}T00:00:00+07:00`);
-  const weatherSched = computeWeatherSchedule(wibMidnight);
-  const weatherSrc = sourceDefinition('weather', date);
-  await runner.createQuestion({
-    domain: 'weather',
-    text: questionText('weather', date),
-    eventDefinition: weatherSrc.label,
-    sourceJson: weatherSrc.json,
-    sourceLabel: weatherSrc.label,
-    targetKey: weatherTargetKey(date),
-    openTimeNs: weatherSched.openTimeNs,
-    closeTimeNs: weatherSched.closeTimeNs,
-    observationStartNs: weatherSched.observationStartNs,
-    observationEndNs: weatherSched.observationEndNs,
-    resolveTimeNs: weatherSched.resolveTimeNs,
-    resolveDeadlineNs: weatherSched.resolveDeadlineNs,
-    revealWindowNs: weatherSched.revealWindowNs,
-  });
-
-  while (!stopped) {
+  // Idempotent scheduling INSIDE the loop so the daemon keeps creating the next
+  // period's Question as time advances (hourly price, daily weather).
+  while (!stopping) {
     try {
+      const now = Date.now();
+      const nextHour = Math.floor(now / 3_600_000) * 3_600_000 + 3_600_000;
+      await ensurePriceQuestion(runner, nextHour);
+      const date = wibDateOfUtcMs(now + 7 * 3_600_000 + 86_400_000);
+      await ensureWeatherQuestion(runner, date);
+
       const report = await runner.tick();
       for (const step of report.steps) {
         if (step.sent || step.error) {
@@ -190,7 +204,8 @@ async function run(): Promise<void> {
     } catch (err) {
       process.stderr.write(`[run] tick error: ${(err as Error).message}\n`);
     }
-    await new Promise((r) => setTimeout(r, config.pollIntervalMs));
+    inFlight = new Promise((r) => setTimeout(r, config.pollIntervalMs));
+    await inFlight;
   }
 }
 

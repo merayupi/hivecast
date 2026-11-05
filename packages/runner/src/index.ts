@@ -20,7 +20,7 @@ export * from './schedule.js';
 
 // Chain client (RPC only; real sandbox = configurable RPC endpoint + WASM)
 export { NearChainClient } from './chain/index.js';
-export type { ChainClient, CallOutcome, QuestionSpecArgs } from './chain/types.js';
+export type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs } from './chain/types.js';
 
 // Persistence
 export { Store } from './store.js';
@@ -28,7 +28,14 @@ export type { JournalRow, ReservationRow } from './store.js';
 
 // Orchestration
 export { Runner, LiveSourceProvider } from './runner.js';
-export type { StepResult, TickReport, SourceProvider, StrategyInputResult, ResolutionResult } from './runner.js';
+export type {
+  StepResult,
+  TickReport,
+  SourceProvider,
+  StrategyInputResult,
+  ResolutionResult,
+  CreateQuestionSpec,
+} from './runner.js';
 
 // Public runtime interface
 export { Runtime } from './runtime.js';
