@@ -97,17 +97,16 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
         gas: BUY_GAS,
         deposit: q.access_price,
       });
-      setTxHash(confirmed.txHash);
-      await loadReceipt();
-    } catch (err) {
-      const msg = (err as Error).message;
-      // An included-but-not-finalized call is pending, not failed: keep polling.
-      if (msg.startsWith('transaction not finalized')) {
+      if (confirmed.txHash) setTxHash(confirmed.txHash);
+      if (confirmed.pending) {
+        // Browser wallet redirected for signing; poll the receipt until the
+        // finalized entitlement is observed — never claim "complete" early.
         setPendingTx(true);
         setFetchError('Purchase submitted — waiting for finalization, then the receipt will appear.');
-      } else {
-        setFetchError(msg);
       }
+      await loadReceipt();
+    } catch (err) {
+      setFetchError((err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -140,16 +139,14 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
         gas: BUY_GAS,
         deposit: '0',
       });
-      setTxHash(confirmed.txHash);
-      await loadReceipt();
-    } catch (err) {
-      const msg = (err as Error).message;
-      if (msg.startsWith('transaction not finalized')) {
+      if (confirmed.txHash) setTxHash(confirmed.txHash);
+      if (confirmed.pending) {
         setPendingTx(true);
         setFetchError('Claim submitted — waiting for finalization.');
-      } else {
-        setFetchError(msg);
       }
+      await loadReceipt();
+    } catch (err) {
+      setFetchError((err as Error).message);
     } finally {
       setBusy(null);
     }

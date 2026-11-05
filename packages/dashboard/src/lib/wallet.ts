@@ -31,6 +31,9 @@ export interface SignedProof {
 export interface ConfirmedCall {
   txHash: string;
   result: string | null;
+  /** true when the browser wallet redirected for signing and the outcome must
+   * be confirmed from finalized chain state rather than the returned promise. */
+  pending: boolean;
 }
 
 const RPC = 'https://test.rpc.fastnear.com';
@@ -49,12 +52,16 @@ function decodeBase64(value: string): Uint8Array {
 
 /**
  * The one place that decides whether a wallet transaction is *confirmed*.
- * `signAndSendTransaction` may return an included-but-not-finalized outcome;
- * only `final_execution_status === 'FINAL'` **and** a `SuccessValue` count as
- * done. A `Failure` throws; anything else is a *pending* state the caller must
- * keep polling, never a silent success.
+ * Browser wallets (Meteor) redirect to the wallet and `signAndSendTransaction`
+ * resolves `void` — the transaction is submitted but the promise carries no
+ * outcome. Only `final_execution_status === 'FINAL'` **and** a `SuccessValue`
+ * count as confirmed; a `Failure` throws; a `void`/incomplete outcome is a
+ * *pending* state the caller must poll from finalized chain state.
  */
-function classifyOutcome(outcome: FinalExecutionOutcome): ConfirmedCall {
+function classifyOutcome(outcome: FinalExecutionOutcome | void): ConfirmedCall {
+  if (outcome === undefined || outcome === null) {
+    return { txHash: '', result: null, pending: true };
+  }
   const status = outcome.status;
   if (typeof status === 'object' && status !== null && 'Failure' in status) {
     throw new Error(`transaction failed: ${JSON.stringify(status.Failure)}`);
@@ -62,16 +69,14 @@ function classifyOutcome(outcome: FinalExecutionOutcome): ConfirmedCall {
   const isFinal = outcome.final_execution_status === 'FINAL';
   const isSuccess = typeof status === 'object' && status !== null && 'SuccessValue' in status;
   if (!isFinal || !isSuccess) {
-    throw new Error(
-      `transaction not finalized (status ${outcome.final_execution_status ?? 'unknown'}); wait and refresh — it may still confirm`,
-    );
+    return { txHash: outcome.transaction?.hash ?? '', result: null, pending: true };
   }
   let result: string | null = null;
   const sv = status.SuccessValue;
   if (typeof sv === 'string' && sv.length > 0) {
     result = new TextDecoder().decode(decodeBase64(sv));
   }
-  return { txHash: outcome.transaction.hash, result };
+  return { txHash: outcome.transaction.hash, result, pending: false };
 }
 
 export class WalletConnector {
@@ -160,7 +165,7 @@ export class WalletConnector {
       receiverId: params.contractId,
       actions: [actionCreators.functionCall(params.methodName, params.args, BigInt(params.gas), BigInt(params.deposit))],
     });
-    return classifyOutcome(outcome);
+    return classifyOutcome(outcome as FinalExecutionOutcome | void);
   }
 }
 
