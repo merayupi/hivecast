@@ -275,13 +275,13 @@ export class Runner {
     const signed = this.store.getSignedTx(dedupKey);
     if (signed) {
       if (await verify()) {
-        this.store.markConfirmed(dedupKey);
+        this.store.markConfirmed(dedupKey, signed.txHash);
         this.store.deleteSignedTx(dedupKey);
         return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
       }
       const outcome = await this.chain.broadcastCall(signed.signedBytesBase64);
       if (outcome.status === 'success') {
-        this.store.markConfirmed(dedupKey);
+        this.store.markConfirmed(dedupKey, outcome.txHash ?? signed.txHash);
         this.store.deleteSignedTx(dedupKey);
         return { kind, questionId, accountId, sent: true, reason: 'rebroadcast-sent', error: null };
       }
@@ -313,7 +313,7 @@ export class Runner {
     this.store.markSubmitted(dedupKey, prepared.txHash);
     const outcome = await this.chain.broadcastCall(prepared.signedBytesBase64);
     if (outcome.status === 'success') {
-      this.store.markConfirmed(dedupKey);
+      this.store.markConfirmed(dedupKey, outcome.txHash ?? prepared.txHash);
       this.store.deleteSignedTx(dedupKey);
       return { kind, questionId, accountId, sent: true, reason: 'sent', error: null };
     }
@@ -800,7 +800,7 @@ export class Runner {
       const outcome = await this.chain.broadcastCall(signed.signedBytesBase64);
       if (outcome.status === 'success' && typeof outcome.result === 'number') {
         const questionId = outcome.result as number;
-        this.store.markConfirmed(dedupKey);
+        this.store.markConfirmed(dedupKey, outcome.txHash ?? signed.txHash);
         this.store.deleteSignedTx(dedupKey);
         const local = this.toLocalQuestion(questionId, params, participants);
         this.store.saveQuestion(local, params.targetKey);
@@ -842,7 +842,7 @@ export class Runner {
     const outcome = await this.chain.broadcastCall(prepared.signedBytesBase64);
     if (outcome.status === 'success' && typeof outcome.result === 'number') {
       const questionId = outcome.result as number;
-      this.store.markConfirmed(dedupKey);
+      this.store.markConfirmed(dedupKey, outcome.txHash ?? prepared.txHash);
       this.store.deleteSignedTx(dedupKey);
       const local = this.toLocalQuestion(questionId, params, participants);
       this.store.saveQuestion(local, params.targetKey);

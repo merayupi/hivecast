@@ -476,6 +476,7 @@ async function main(): Promise<void> {
         kudusLongitude: '110.8397',
         kudusTimezone: 'Asia/Jakarta',
         operationalGasReserveYocto: 0n,
+        rpcTimeoutMs: 30_000,
         http: { enabled: false, host: '127.0.0.1', port: 8787 },
         access: {
           sessionTtlMs: 86_400_000,

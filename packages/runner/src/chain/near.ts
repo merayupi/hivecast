@@ -29,6 +29,18 @@ function decodeSignedTransactionBytes(base64: string): SignedTransaction {
   return SignedTransaction.decode(new Uint8Array(Buffer.from(base64, 'base64')));
 }
 
+/**
+ * Canonical NEAR transaction ID from a base64-encoded SIGNED transaction.
+ * NEAR's transaction id = base58(sha256(UNSIGNED transaction bytes)) — the
+ * signature is excluded. Decoding the signed bytes and re-encoding only its
+ * inner `transaction` yields the canonical id.
+ */
+export function canonicalTxHashFromSignedBytes(signedBytesBase64: string): string {
+  const signed = decodeSignedTransactionBytes(signedBytesBase64);
+  const unsignedBytes = signed.transaction.encode();
+  return baseEncode(createHash('sha256').update(unsignedBytes).digest());
+}
+
 interface Credential {
   account_id: string;
   public_key: string;
@@ -94,6 +106,26 @@ export class NearChainClient implements ChainClient {
     this.provider = new JsonRpcProvider({ url: config.rpcUrl });
   }
 
+  /** Bound a read-only RPC call so a hanging/rate-limited endpoint surfaces as
+   * unavailable (503) within the configured timeout instead of blocking
+   * unbounded. */
+  private async withReadTimeout<T>(label: string, op: () => Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        op(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new ChainUnavailableError(`${label} timed out after ${this.config.rpcTimeoutMs}ms (${this.config.rpcUrl})`)),
+            this.config.rpcTimeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   nowNs(): bigint {
     return BigInt(Date.now()) * 1_000_000n;
   }
@@ -116,12 +148,14 @@ export class NearChainClient implements ChainClient {
   private async view<T>(method: string, args: Record<string, unknown>): Promise<T> {
     let result: T | undefined;
     try {
-      result = (await this.provider.callFunction({
-        contractId: this.contractId,
-        method,
-        args,
-        blockQuery: { finality: 'final' },
-      })) as T;
+      result = (await this.withReadTimeout(`RPC view ${method}`, () =>
+        this.provider.callFunction({
+          contractId: this.contractId,
+          method,
+          args,
+          blockQuery: { finality: 'final' },
+        }),
+      )) as T;
     } catch (err) {
       // Tag transport/view failures clearly so the daemon can report "RPC
       // unavailable" instead of a misleading contract error. No fallback: the
@@ -147,12 +181,15 @@ export class NearChainClient implements ChainClient {
       receiverId: this.contractId,
       actions: [actions.functionCall(methodName, args, gas, deposit)],
     });
-    const bytes = signedTx.encode();
-    // NEAR transaction hash = base58(sha256(signed transaction bytes)).
-    const txHash = baseEncode(createHash('sha256').update(bytes).digest());
+    const signedBytes = signedTx.encode();
+    // Canonical NEAR transaction ID = base58(sha256(UNSIGNED transaction
+    // bytes)). The signature is EXCLUDED from the hash (a signed transaction
+    // encodes signature, so hashing signedBytes would produce a non-canonical
+    // id that does not match the chain's transaction hash).
+    const txHash = canonicalTxHashFromSignedBytes(Buffer.from(signedBytes).toString('base64'));
     const nonce = String(signedTx.transaction.nonce);
     return {
-      signedBytesBase64: Buffer.from(bytes).toString('base64'),
+      signedBytesBase64: Buffer.from(signedBytes).toString('base64'),
       txHash,
       nonce,
     };
@@ -161,20 +198,22 @@ export class NearChainClient implements ChainClient {
   /** Broadcast a previously prepared (signed) transaction and await FINAL. */
   async broadcastCall(signedBytesBase64: string): Promise<CallOutcome> {
     const signedTx = decodeSignedTransactionBytes(signedBytesBase64);
+    const canonicalHash = canonicalTxHashFromSignedBytes(signedBytesBase64);
     try {
       const outcome = await this.provider.sendTransactionUntil(signedTx, 'FINAL');
-      return this.parseOutcome(outcome as unknown as Record<string, unknown>);
+      return this.parseOutcome(outcome as unknown as Record<string, unknown>, canonicalHash);
     } catch (err) {
-      // Uncertain network error: inclusion status is unknown; the runner will
-      // rebroadcast the SAME signed transaction, never re-sign a fresh one.
-      return { txHash: null, success: false, result: null, error: (err as Error).message, status: 'uncertain' };
+      // Uncertain network error: inclusion status is unknown. Keep the
+      // CANONICAL hash so the journal/receipt lookup stays correct while the
+      // runner rebroadcasts the same signed transaction (never re-sign).
+      return { txHash: canonicalHash, success: false, result: null, error: (err as Error).message, status: 'uncertain' };
     }
   }
 
-  private parseOutcome(outcome: Record<string, unknown>): CallOutcome {
+  private parseOutcome(outcome: Record<string, unknown>, canonicalHash?: string): CallOutcome {
     const status = 'status' in outcome ? outcome.status : undefined;
     const receiptsOutcome = 'receipts_outcome' in outcome ? outcome.receipts_outcome : undefined;
-    const txHash =
+    const chainHash =
       'transaction' in outcome &&
       typeof outcome.transaction === 'object' &&
       outcome.transaction !== null &&
@@ -182,6 +221,9 @@ export class NearChainClient implements ChainClient {
       typeof outcome.transaction.hash === 'string'
         ? outcome.transaction.hash
         : null;
+    // Prefer the chain's own hash; fall back to the canonical prepared hash
+    // (they must agree for a finalized transaction).
+    const txHash = chainHash ?? canonicalHash ?? null;
     const success = isSuccess(status);
     const failErr = extractError(status, receiptsOutcome);
     let result: unknown = null;
