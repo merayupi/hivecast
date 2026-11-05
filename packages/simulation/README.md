@@ -33,7 +33,7 @@ module. Deterministic for a fixed `(bundle, config, seed)`.
 Per domain: Brier error (with its denominator), coverage/round counts, active
 cohort, final Bankroll, peak locked Stake, total wagered, wagering P/L, and fee
 income — plus equal-weight and stake-weighted aggregate Brier on the same rounds,
-and a labelled log-odds comparison (probabilities clipped to `[1e-9, 1-1e-9]`).
+and a labelled log-odds pooled aggregate comparison (logit-mean pooled, then scored with ordinary Brier; probabilities clipped to `[1e-9, 1-1e-9]`).
 
 ## Data bundle and provenance
 

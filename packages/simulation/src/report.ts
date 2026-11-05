@@ -80,7 +80,7 @@ export function renderTable(report: ReplayReport): string {
     lines.push(`- [${a.availability}] ${a.id}${a.availableAt ? ` (available_at: ${a.availableAt})` : ''}`);
   }
   lines.push('');
-  lines.push('log-odds comparison is a labelled simulation metric with probability clipped to [1e-9, 1-1e-9]; it is not the paid probability-space aggregate.');
+  lines.push('log-odds-brier is a labelled simulation comparison: probabilities are pooled in log-odds space (weighted mean of logits, equal or stake weights) then inverse-logit\u2019d and scored with ordinary Brier; probability clipped to [1e-9, 1-1e-9]. It is not the paid probability-space aggregate.');
   return lines.join('\n');
 }
 

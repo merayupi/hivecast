@@ -211,8 +211,18 @@ function clampProbability(p: number): number {
   return Math.max(1e-9, Math.min(1 - 1e-9, p));
 }
 
-function logOdds(p: number): number {
-  return Math.log(clampProbability(p) / (1 - clampProbability(p)));
+/**
+ * Logit transform with probability clipped to [epsilon, 1-epsilon] for 0%/100%
+ * endpoints. Used only for the labelled log-odds pooled aggregate comparison.
+ */
+function logit(p: number): number {
+  const pc = clampProbability(p);
+  return Math.log(pc / (1 - pc));
+}
+
+/** Inverse logit (logistic sigmoid). */
+function inverseLogit(x: number): number {
+  return 1 / (1 + Math.exp(-x));
 }
 
 function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig): DomainResult {
@@ -256,7 +266,7 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
   }
 
   // Aggregates per round.
-  const aggRounds: Array<{ eqBrier: number; swBrier: number; eqLo: number; swLo: number }> = [];
+  const aggRounds: Array<{ eqBrier: number; swBrier: number; eqLoBrier: number; swLoBrier: number }> = [];
   let roundsWithParticipants = 0;
   let peakLocked = 0n;
 
@@ -329,11 +339,25 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
       const swNum = roundParticipants.reduce((a, p) => a + p.stake * BigInt(p.probabilityBps), 0n);
       const sw = Number(swNum) / Number(totalStake) / 10_000;
       const o = round.outcome / 10_000;
+
+      // Labelled log-odds pooled aggregate: mean of logits (equal weights) and
+      // stake-weighted mean of logits, inverse-logit'd back to a pooled
+      // probability, then scored with ordinary Brier against the outcome.
+      const logits = roundParticipants.map((p) => logit(p.probabilityBps / 10_000));
+      const eqLogitMean = logits.reduce((a, b) => a + b, 0) / logits.length;
+      const eqPooled = inverseLogit(eqLogitMean);
+      const totalStakeN = Number(totalStake);
+      const swLogitMean = roundParticipants.reduce(
+        (acc, p) => acc + (Number(p.stake) / totalStakeN) * logit(p.probabilityBps / 10_000),
+        0,
+      );
+      const swPooled = inverseLogit(swLogitMean);
+
       aggRounds.push({
         eqBrier: (eq - o) * (eq - o),
         swBrier: (sw - o) * (sw - o),
-        eqLo: (logOdds(eq) - logOdds(o)) ** 2,
-        swLo: (logOdds(sw) - logOdds(o)) ** 2,
+        eqLoBrier: (eqPooled - o) * (eqPooled - o),
+        swLoBrier: (swPooled - o) * (swPooled - o),
       });
     }
   }
@@ -354,8 +378,8 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
     const n = aggRounds.length;
     const eqMean = aggRounds.reduce((a, r) => a + r.eqBrier, 0) / n;
     const swMean = aggRounds.reduce((a, r) => a + r.swBrier, 0) / n;
-    const eqLoMean = aggRounds.reduce((a, r) => a + r.eqLo, 0) / n;
-    const swLoMean = aggRounds.reduce((a, r) => a + r.swLo, 0) / n;
+    const eqLoMean = aggRounds.reduce((a, r) => a + r.eqLoBrier, 0) / n;
+    const swLoMean = aggRounds.reduce((a, r) => a + r.swLoBrier, 0) / n;
     aggregates.push(
       { domain, kind: 'equal-weight', rounds: n, brierMean: eqMean, logOddsBrierMean: eqLoMean, logOddsClip: '[1e-9, 1-1e-9]' },
       { domain, kind: 'stake-weighted', rounds: n, brierMean: swMean, logOddsBrierMean: swLoMean, logOddsClip: '[1e-9, 1-1e-9]' },

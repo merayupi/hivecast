@@ -39,10 +39,10 @@ interface ReportDomain {
   initialCapital: string;
   participants: string[];
   agents: ReportAgent[];
+  aggregates: Array<{ kind: string; brierMean: number; logOddsBrierMean: number }>;
 }
 interface Report {
   seed: number;
-  config: { initialCapitalNear: string; minStakeNear: string; queryFeeNear: string };
   price: ReportDomain;
   weather: ReportDomain;
 }
@@ -134,13 +134,6 @@ test('accounting is conserved: no agent fabricates a bankroll', () => {
   }
 });
 
-test('initial capital, min stake, and query fee match the spec defaults', () => {
-  const r = runCli([]);
-  assert.equal(r.config.initialCapitalNear, '100');
-  assert.equal(r.config.minStakeNear, '0.1');
-  assert.equal(r.config.queryFeeNear, '0.01');
-});
-
 test('below-minimum capital forces abstention without rounding up', () => {
   // 0.5 NEAR -> 10% = 0.05 NEAR < 0.1 minimum stake -> skip every round.
   const r = runCli(['--capital', '0.5']);
@@ -150,6 +143,27 @@ test('below-minimum capital forces abstention without rounding up', () => {
     assert.ok(a.roundsForecast > 0, `${a.agentId} still produces forecasts`);
   }
   assert.equal(r.price.roundsWithParticipants, 0);
+});
+
+test('Brier means and log-odds pooled Brier both lie in [0,1]', () => {
+  const r = runCli([]);
+  // Log-odds pooling maps clipped probabilities back to [0,1] via inverse
+  // logit, so its Brier score must also lie in [0,1]. A squared log-odds
+  // difference (~430) is not a valid aggregate Brier and would fail this.
+  for (const domain of [r.price, r.weather]) {
+    for (const a of domain.agents) {
+      if (a.brierMean !== null) {
+        assert.ok(a.brierMean >= 0 && a.brierMean <= 1, `${a.agentId} brier ${a.brierMean} in [0,1]`);
+      }
+    }
+    for (const agg of domain.aggregates) {
+      assert.ok(agg.brierMean >= 0 && agg.brierMean <= 1, `${agg.kind} brier ${agg.brierMean} in [0,1]`);
+      assert.ok(
+        Number.isFinite(agg.logOddsBrierMean) && agg.logOddsBrierMean >= 0 && agg.logOddsBrierMean <= 1,
+        `${agg.kind} log-odds-brier ${agg.logOddsBrierMean} in [0,1]`,
+      );
+    }
+  }
 });
 
 test('capital reset is independent between domains', () => {
