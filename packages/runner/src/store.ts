@@ -173,7 +173,31 @@ export class Store {
         nonce TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS retired_rounds (
+        question_id INTEGER PRIMARY KEY,
+        phase TEXT NOT NULL,
+        retired_at INTEGER NOT NULL
+      );
     `);
+  }
+
+  // -------------------------------------------------------------------------
+  // Retired (terminal) round markers — durable, no time heuristic
+  // -------------------------------------------------------------------------
+
+  /** Mark a Round retired once its FINALIZED terminal phase was actually observed. */
+  markRetired(questionId: number, phase: 'settled' | 'cancelled'): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO retired_rounds (question_id, phase, retired_at) VALUES (?, ?, ?)')
+      .run(questionId, phase, Date.now());
+  }
+
+  isRetired(questionId: number): boolean {
+    const row = this.db
+      .prepare('SELECT 1 AS x FROM retired_rounds WHERE question_id = ?')
+      .get(questionId);
+    return row !== undefined;
   }
 
   // -------------------------------------------------------------------------

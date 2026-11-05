@@ -90,16 +90,6 @@ export interface CreateQuestionSpec {
   revealWindowNs: bigint;
 }
 
-/**
- * Grace past the latest possible reveal deadline after which a Question needs
- * no more per-question runner phase work (commit/freeze/resolve/reveal/settle).
- * Withdrawal is account-scoped and handled globally, so historical Rounds are
- * never re-walked. Default price life ≈ open(15m)+obs(1h)+resolve/reveal(30m);
- * 6h grace covers settle retries and daemon restarts while keeping the per-tick
- * horizon bounded to a handful of Rounds.
- */
-const LIFECYCLE_GRACE_NS = 6n * 3_600n * 1_000_000_000n;
-
 function serializeCreateSpec(spec: CreateQuestionSpec): string {
   return JSON.stringify({
     domain: spec.domain,
@@ -691,7 +681,10 @@ export class Runner {
       }
       case 'settled':
       case 'cancelled':
-        // Claimable balances are drained by the global account sweep, not here.
+        // Terminal phase actually observed: retire durably and stop per-Round
+        // work. Claimable/pending balances are drained by the global account
+        // sweep, so this is independent of retirement.
+        this.store.markRetired(q.questionId, chainQuestion.phase as 'settled' | 'cancelled');
         return [];
       default:
         return [];
@@ -746,15 +739,15 @@ export class Runner {
     }
   }
 
-  /** One pass: reconcile creates, advance active rounds, drain global balances. */
+  /** One pass: reconcile creates, advance non-retired rounds, drain global balances. */
   async tick(): Promise<TickReport> {
     await this.reconcileCreates();
     const steps: StepResult[] = [];
-    const now = this.nowNs();
     for (const q of this.store.listQuestions()) {
-      // Historical (durable-finalized) Rounds are inactive: skip anything whose
-      // last possible reveal/settle deadline has passed. Withdrawal is global.
-      if (now >= q.resolveDeadlineNs + q.revealWindowNs + LIFECYCLE_GRACE_NS) continue;
+      // Retire ONLY when the finalized terminal phase was actually observed and
+      // persisted. Never skip by age: unresolved/resolved Rounds must still be
+      // cancelled/settled after arbitrary downtime.
+      if (this.store.isRetired(q.questionId)) continue;
       steps.push(...(await this.advance(q)));
     }
     steps.push(...(await this.withdrawAllAgents()));
