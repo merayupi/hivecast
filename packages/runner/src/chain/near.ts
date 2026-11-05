@@ -157,11 +157,14 @@ export class NearChainClient implements ChainClient {
         }),
       )) as T;
     } catch (err) {
-      // Tag transport/view failures clearly so the daemon can report "RPC
-      // unavailable" instead of a misleading contract error. No fallback: the
-      // caller must retry or wait; state is never invented.
+      // Preserve the typed ChainUnavailableError (timeout / transport) so the
+      // HTTP service classifies it as 503, not a generic 500. Only non-transport
+      // contract/RPC errors are re-wrapped as a tagged generic error.
+      if (err instanceof ChainUnavailableError) {
+        throw err;
+      }
       throw new Error(
-        `RPC view ${method} unavailable (${this.config.rpcUrl}): ${(err as Error).message}`,
+        `RPC view ${method} failed (${this.config.rpcUrl}): ${(err as Error).message}`,
         { cause: err },
       );
     }
