@@ -517,8 +517,17 @@ async function main(): Promise<void> {
         headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
         body: JSON.stringify({ account_id: accountId }),
       });
-      assert.equal(res.status, 200, `mint failed: ${await res.text()}`);
-      return (await res.json()) as { challenge_id: string; nonce: string; message: string; recipient: string; account_id: string };
+      // Read the body exactly once; never consume it eagerly in an assert
+      // message (the message expression is evaluated unconditionally).
+      const text = await res.text();
+      let body: { challenge_id: string; nonce: string; message: string; recipient: string; account_id: string };
+      try {
+        body = JSON.parse(text) as typeof body;
+      } catch {
+        throw new Error(`mint challenge non-JSON (${res.status}): ${text.slice(0, 500)}`);
+      }
+      assert.equal(res.status, 200, `mint failed (${res.status}): ${text.slice(0, 500)}`);
+      return body;
     }
 
     async function verifyOverHttp(params: {
