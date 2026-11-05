@@ -106,7 +106,7 @@ function LeaderboardTable({ board }: { board: GlobalLeaderboard }) {
               <td className="num">{brier(e.brier_mean)}</td>
               <td className="num">{e.rounds_revealed}/{e.rounds_participated}</td>
               <td className="num">{near(e.total_stake)} Ⓝ</td>
-              <td className="num">{e.locked_stake === null ? 'unavailable' : `${near(e.locked_stake)} Ⓝ`}</td>
+              <td className="num">{near(e.locked_stake)} Ⓝ</td>
             </tr>
           ))}
         </tbody>

@@ -152,8 +152,8 @@ export interface LeaderboardEntry {
   brier_mean: number | null;
   brier_sum_sq: string;
   total_stake: string;
-  /** `null` when coverage is partial and locked stake is unavailable. */
-  locked_stake: string | null;
+  /** Stake locked in non-terminal rounds (partial while coverage is partial). */
+  locked_stake: string;
 }
 
 export interface GlobalLeaderboard {
