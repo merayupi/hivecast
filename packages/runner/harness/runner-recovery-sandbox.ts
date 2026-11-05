@@ -35,7 +35,7 @@ import { Account, JsonRpcProvider, KeyPair, actions, nearToYocto } from 'near-ap
 import type { AgentId, Candle } from '@hivecast/core';
 
 import { NearChainClient } from '../src/chain/near.js';
-import type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs } from '../src/chain/types.js';
+import type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs, TxFinalStatusView } from '../src/chain/types.js';
 import type { RunnerConfig } from '../src/config.js';
 import { Runner } from '../src/runner.js';
 import type { SourceProvider, StrategyInputResult, ResolutionResult } from '../src/runner.js';
@@ -340,6 +340,18 @@ class SandboxRunnerChain implements ChainClient {
   }
   viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null> {
     return this.inner.viewAccessKeyPermission(accountId, publicKey);
+  }
+  viewNativeBalance(accountId: string): Promise<bigint> {
+    return this.inner.viewNativeBalance(accountId);
+  }
+  viewNativeAvailable(accountId: string): Promise<bigint> {
+    return this.inner.viewNativeAvailable(accountId);
+  }
+  viewTxTokensBurnt(txHash: string, signer: string): Promise<string | null> {
+    return this.inner.viewTxTokensBurnt(txHash, signer);
+  }
+  viewTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null> {
+    return this.inner.viewTxFinalStatus(txHash, accountId);
   }
 
   prepareCall(methodName: string, args: Record<string, unknown>, signer: string, deposit: bigint, gas?: bigint): Promise<PreparedCall> {
