@@ -75,14 +75,19 @@ export class PublicChainCache implements PublicReadSource {
 
   getCoverageInfo(): { totalQuestions: number; fetchedQuestions: number; complete: boolean } {
     const cursor = this.store.getPublicCursor();
+    // 'complete' requires BOTH that the fetch cursor has caught up to the last
+    // observed on-chain question count AND that the live (non-terminal) set was
+    // freshly re-walked on the current request. A stale TTL-cached live set is
+    // "as of" a past refresh, so it must report 'partial', never 'complete'.
     return {
       totalQuestions: this.lastObservedTotal,
       fetchedQuestions: cursor,
-      complete: cursor >= this.lastObservedTotal,
+      complete: cursor >= this.lastObservedTotal && this.lastFreshLiveWalk,
     };
   }
 
   private lastObservedTotal = 0;
+  private lastFreshLiveWalk = false;
 
   private async refreshCursor(): Promise<void> {
     const state = await this.chain.getContractState();
@@ -127,10 +132,11 @@ export class PublicChainCache implements PublicReadSource {
     return out;
   }
 
-  private async readLiveQuestions(): Promise<QuestionView[]> {
+  private async readLiveQuestions(): Promise<{ rows: QuestionView[]; fresh: boolean }> {
     const now = Date.now();
     if (this.liveQuestionsCache && now - this.liveQuestionsCache.at < LIVE_READ_TTL_MS) {
-      return this.liveQuestionsCache.rows;
+      // Served from a short TTL cache: "as of" a past refresh, not a fresh walk.
+      return { rows: this.liveQuestionsCache.rows, fresh: false };
     }
     // Re-read only the currently non-terminal persisted questions (bounded by
     // the number of live Rounds, never by history). Each terminal transition is
@@ -150,7 +156,7 @@ export class PublicChainCache implements PublicReadSource {
       }
     }
     this.liveQuestionsCache = { at: now, rows: live };
-    return live;
+    return { rows: live, fresh: true };
   }
 
   async listAllQuestions(): Promise<QuestionView[]> {
@@ -158,7 +164,8 @@ export class PublicChainCache implements PublicReadSource {
     const terminal = this.store
       .listPublicTerminalRounds()
       .map((r) => (JSON.parse(r.dataJson) as TerminalData).question);
-    const live = await this.readLiveQuestions();
+    const { rows: live, fresh } = await this.readLiveQuestions();
+    this.lastFreshLiveWalk = fresh;
     return [...terminal, ...live].sort((a, b) => a.question_id - b.question_id);
   }
 
