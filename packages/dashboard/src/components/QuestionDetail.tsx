@@ -30,6 +30,10 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
   const [txHash, setTxHash] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<ReceiptState | null>(null);
   const [pendingTx, setPendingTx] = useState(false);
+  /** What the pending poll is waiting for: a new purchase receipt (null→present)
+   * or a refunded transition (refunded false→true). A pre-existing receipt must
+   * not stop a claim poll. */
+  const pendingTarget = useRef<'purchase' | 'refunded' | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const accountId = wallet.accountId;
@@ -44,6 +48,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
     setFetchError(null);
     setPendingTx(false);
     setBusy(null);
+    pendingTarget.current = null;
   }, [q.question_id, accountId]);
 
   // Wall clock for the countdown + sale window.
@@ -76,9 +81,19 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
     return () => clearInterval(pollRef.current);
   }, [pendingTx, loadReceipt]);
 
-  // Stop polling once the receipt appears (purchase/refund observed finalized).
+  // Stop polling only once the definitive target is observed: for a purchase,
+  // a receipt that newly appeared; for a claim, `refunded === true`. A
+  // pre-existing receipt (refunded false) must not end a claim poll.
   useEffect(() => {
-    if (receipt && pendingTx) setPendingTx(false);
+    if (!pendingTx || !receipt) return;
+    const target = pendingTarget.current;
+    if (target === 'refunded' && receipt.refunded === true) {
+      setPendingTx(false);
+      pendingTarget.current = null;
+    } else if (target === 'purchase') {
+      setPendingTx(false);
+      pendingTarget.current = null;
+    }
   }, [receipt, pendingTx]);
 
   const saleOpen = inSaleWindow(q, nowMs);
@@ -101,6 +116,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
       if (confirmed.pending) {
         // Browser wallet redirected for signing; poll the receipt until the
         // finalized entitlement is observed — never claim "complete" early.
+        pendingTarget.current = 'purchase';
         setPendingTx(true);
         setFetchError('Purchase submitted — waiting for finalization, then the receipt will appear.');
       }
@@ -141,6 +157,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
       });
       if (confirmed.txHash) setTxHash(confirmed.txHash);
       if (confirmed.pending) {
+        pendingTarget.current = 'refunded';
         setPendingTx(true);
         setFetchError('Claim submitted — waiting for finalization.');
       }
