@@ -9,6 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { Account, JsonRpcProvider, actions, teraToGas } from 'near-api-js';
 import type { KeyPairString } from 'near-api-js';
+import { AccountDoesNotExistError, AccessKeyDoesNotExistError } from 'near-api-js/rpc-errors';
 import type { RunnerConfig } from '../config.js';
 import type {
   BalanceView,
@@ -51,6 +52,14 @@ function isSuccess(status: unknown): boolean {
   // Only a proven SuccessValue is success. Unknown/missing status is NOT success.
   if (typeof status === 'object' && status !== null && 'SuccessValue' in status) return true;
   return false;
+}
+
+/** A transient chain/RPC availability failure (distinct from a definitive no-proof). */
+export class ChainUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ChainUnavailableError';
+  }
 }
 
 function extractError(status: unknown, receiptsOutcome: unknown): string | null {
@@ -230,9 +239,18 @@ export class NearChainClient implements ChainClient {
       });
       if (key.permission === 'FullAccess') return 'full-access';
       return 'function-call';
-    } catch {
-      // Key or account not found (or RPC unavailable): fail closed, no ownership proof.
-      return null;
+    } catch (err) {
+      // Definitive, queryable answers: the account or the key does not exist.
+      // These are a definitive "no ownership proof" (null), NOT an outage.
+      if (err instanceof AccountDoesNotExistError || err instanceof AccessKeyDoesNotExistError) {
+        return null;
+      }
+      // Any other failure (RPC unreachable, timeout, transient) is a chain
+      // availability problem and must surface as unavailable, never as a
+      // silently-suppressed "no proof".
+      throw new ChainUnavailableError(
+        `viewAccessKeyPermission unavailable for ${accountId}: ${(err as Error).message}`,
+      );
     }
   }
 

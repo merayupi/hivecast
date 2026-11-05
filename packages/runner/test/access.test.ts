@@ -1,16 +1,18 @@
 /**
- * Forecast Access seam tests (ticket #5).
+ * Forecast Access boundary tests (ticket #5) — NOT a purchase proof.
  *
- * These exercise the approved public product-lifecycle seam only — the
- * authenticated Forecast Access HTTP/auth surface — through a REAL durable
- * Store, a controllable ChainClient (the external chain adapter), and genuine
- * Ed25519 NEP-413 signatures produced with the real near-api-js signer.
+ * These exercise the auth/delivery boundary: a REAL durable Store, a
+ * controllable ChainClient (the external chain adapter the spec permits
+ * controlling), and genuine Ed25519 NEP-413 signatures produced with the real
+ * near-api-js signer. They verify ownership-challenge semantics (replay,
+ * expiry, wrong context, function-call key, concurrency, honest-unavailable)
+ * at the HTTP/auth seam.
  *
- * No private Store row / Borsh helper is asserted directly: the Store is
- * exercised through its consumers (`AccessAuth` mint/verify/deliver), and the
- * NEP-413 bytes are verified by signing real payloads, not by inspecting the
- * encoder output. The chain is the only mocked collaborator (it is the
- * external source adapter, exactly the adapter the spec allows to control).
+ * They do NOT prove a real contract purchase or a real FullAccess key on a
+ * real chain: that is the Linux near-sandbox integration driver
+ * (`harness/access-sandbox.ts` + its workflow), which deploys the real WASM to
+ * a real `near-sandbox` node with ephemeral keys. No test here claims a "real
+ * purchase".
  */
 
 import test from 'node:test';
@@ -230,7 +232,7 @@ async function signChallenge(
 // Tests
 // ---------------------------------------------------------------------------
 
-test('auth: real purchase owner with a valid NEP-413 signature gets the frozen payload', async () => {
+test('auth: a valid NEP-413 signature returns the frozen payload through the delivery boundary', async () => {
   const dbPath = tmpDbPath();
   const config = buildConfig(dbPath);
   const clock = new FakeClock();

@@ -14,6 +14,7 @@
 
 import { randomBytes } from 'node:crypto';
 import type { ChainClient } from '../chain/types.js';
+import { ChainUnavailableError } from '../chain/near.js';
 import type { RunnerConfig } from '../config.js';
 import type { Store } from '../store.js';
 import type { LocalQuestion, QuestionView } from '../types.js';
@@ -152,8 +153,18 @@ export class AccessAuth {
     if (!valid) throw new AccessError('invalid_signature', 401, 'signature verification failed');
 
     // The signing key must currently be a FullAccess key of the asserted
-    // account on the configured network, on finalized state.
-    const permission = await this.chain.viewAccessKeyPermission(input.accountId, input.publicKey);
+    // account on the configured network, on finalized state. A definitive
+    // no-proof (account/key absent) fails closed as not_full_access; a
+    // transient chain outage surfaces as unavailable, never suppressed.
+    let permission: 'full-access' | 'function-call' | null;
+    try {
+      permission = await this.chain.viewAccessKeyPermission(input.accountId, input.publicKey);
+    } catch (err) {
+      if (err instanceof ChainUnavailableError) {
+        throw new AccessError('snapshot_unavailable', 503, 'chain unavailable while verifying ownership');
+      }
+      throw err;
+    }
     if (permission !== 'full-access') {
       throw new AccessError('not_full_access', 401, 'public key is not a finalized FullAccess key of the account');
     }
