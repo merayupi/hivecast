@@ -588,6 +588,26 @@ async function main(): Promise<void> {
       const c = await innerChain.getCommitment(questionId, agentAccts.get(id)!);
       assert.ok(c && c.hash, `commitment missing for ${id}`);
     }
+    // Canonical prepared-hash assertion (the consumer check that the durable
+    // prepared tx hash is the REAL NEAR transaction id, not the old signed-bytes
+    // hash): each commit journal entry's tx_hash must resolve via the public
+    // finalized-status view to the SAME canonical hash with a proven SuccessValue.
+    {
+      const commitJournal = store.listJournal('commit').filter((j) => j.questionId === questionId && j.txHash !== null);
+      assert.ok(commitJournal.length >= PRICE_AGENTS.length, `expected >=${PRICE_AGENTS.length} commit journal entries with a tx hash, got ${commitJournal.length}`);
+      // The committed tx's are already finalized (sandbox produced blocks for
+      // each commit); poll once more past a block so `viewTxFinalStatus` is
+      // non-null for every entry.
+      await advanceTo(sb.rpcUrl, (await currentBlockNs(sb.rpcUrl)) + 2n * NS_PER_BLOCK, blockTimeNs);
+      for (const entry of commitJournal) {
+        const signer = entry.accountId ?? agentAccts.get('persistence')!;
+        const view = await innerChain.viewTxFinalStatus(entry.txHash!, signer);
+        assert.ok(view, `prepared tx hash ${entry.txHash} not found on chain (canonical hash lookup failed)`);
+        assert.equal(view.tx_hash, entry.txHash, 'prepared tx hash must match the on-chain canonical hash');
+        assert.equal(view.success_value, true, `commit tx ${entry.txHash} must have a proven SuccessValue`);
+      }
+      process.stdout.write('recovery: canonical prepared-hash lookup OK (real NEAR tx id resolves)\n');
+    }
     process.stdout.write('recovery: commit-reconcile OK (one commitment per agent, same hash)\n');
 
     // 3. Freeze + publish the snapshot with ONE transport response drop, then
