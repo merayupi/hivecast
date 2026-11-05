@@ -1,0 +1,22 @@
+{
+  "name": "@hivecast/runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HiveCast durable runner: real NEAR RPC/signing, commitment pipeline, private SQLite persistence, source fetchers, and the public runtime interface.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "cli": "tsx src/cli.ts",
+    "service": "tsx src/service-entry.ts",
+    "harness:testnet": "tsx harness/lifecycle-harness.ts"
+  },
+  "dependencies": {
+    "@hivecast/core": "*",
+    "near-api-js": "^7.4.0"
+  }
+}

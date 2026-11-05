@@ -6,3 +6,8 @@ dist/
 .DS_Store
 coverage/
 *.tsbuildinfo
+# Runner private state (never committed)
+hivecast.config.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
