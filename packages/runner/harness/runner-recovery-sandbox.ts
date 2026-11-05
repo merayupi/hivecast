@@ -630,17 +630,52 @@ async function main(): Promise<void> {
 
     // 4. Resolve + reveal + settle (production runner), then withdraw with ONE
     // transport response drop, restart, and assert no double payout.
-    const obsLanded = await advanceTo(sb.rpcUrl, obsEnd + 2n * NS_PER_BLOCK, blockTimeNs);
-    chain.setNow(obsLanded);
-    await runner.tick(); // resolve (fixed outcome YES)
+    //
+    // The production daemon ticks repeatedly; a single tick at a phase
+    // boundary may submit a transition that the contract only accepts once the
+    // block timestamp has actually crossed the boundary. Drive each transition
+    // with a bounded loop that re-advances + re-ticks until the public phase
+    // is observed (never a narrowed assertion: the exact phase/outcome is still
+    // required, and every tick report is logged).
+
+    async function driveUntilPhase(
+      expectedPhase: 'resolved' | 'settled',
+      targetNs: bigint,
+      maxTicks: number,
+    ): Promise<void> {
+      for (let i = 0; i < maxTicks; i++) {
+        const landed = await advanceTo(sb.rpcUrl, targetNs + BigInt(i) * NS_PER_BLOCK, blockTimeNs);
+        chain.setNow(landed);
+        const report = await runner.tick();
+        process.stdout.write(`recovery: tick(${i}) now=${landed} steps=${JSON.stringify(report.steps)}\n`);
+        const q = await innerChain.getQuestion(questionId);
+        if (q?.phase === expectedPhase) return;
+      }
+      const final = await innerChain.getQuestion(questionId);
+      throw new Error(`driveUntilPhase(${expectedPhase}) did not reach phase: ${JSON.stringify(final)}`);
+    }
+
+    // 4a. Resolve within [resolve_time, resolve_deadline).
+    await driveUntilPhase('resolved', obsEnd + 2n * NS_PER_BLOCK, 8);
     const resolvedQ = await innerChain.getQuestion(questionId);
     assert.equal(resolvedQ?.phase, 'resolved', `expected resolved: ${JSON.stringify(resolvedQ)}`);
     assert.equal(resolvedQ?.outcome, true);
 
-    const revealLanded = await advanceTo(sb.rpcUrl, resolvedQ!.reveal_deadline ? BigInt(resolvedQ!.reveal_deadline) + 2n * NS_PER_BLOCK : obsLanded + revealWindow + 2n * NS_PER_BLOCK, blockTimeNs);
-    chain.setNow(revealLanded);
-    await runner.tick(); // reveal + settle
+    // 4b. Reveal within [resolved_at, reveal_deadline) — a SEPARATE tick from
+    // settle, so every agent reveals before the window closes.
+    const revealTarget = resolvedQ!.resolved_at
+      ? BigInt(resolvedQ!.resolved_at) + 2n * NS_PER_BLOCK
+      : obsEnd + 4n * NS_PER_BLOCK;
+    {
+      const landed = await advanceTo(sb.rpcUrl, revealTarget, blockTimeNs);
+      chain.setNow(landed);
+      const revealReport = await runner.tick();
+      process.stdout.write(`recovery: reveal tick steps=${JSON.stringify(revealReport.steps)}\n`);
+    }
 
+    // 4c. Settle after the reveal deadline.
+    const revealDeadline = resolvedQ!.reveal_deadline ? BigInt(resolvedQ!.reveal_deadline) : revealTarget + revealWindow;
+    await driveUntilPhase('settled', revealDeadline + 2n * NS_PER_BLOCK, 8);
     const settledQ = await innerChain.getQuestion(questionId);
     assert.equal(settledQ?.phase, 'settled', `expected settled: ${JSON.stringify(settledQ)}`);
 
@@ -653,15 +688,17 @@ async function main(): Promise<void> {
 
     // Withdraw with ONE transport response drop (the first agent's broadcast).
     chain.dropBroadcastResponses(1);
+    chain.setNow(await currentBlockNs(sb.rpcUrl));
     await runner.tick();
 
     // Restart and tick again — must NOT re-withdraw or double-pay.
     runner = freshRunner();
-    chain.setNow(revealLanded);
+    chain.setNow(await currentBlockNs(sb.rpcUrl));
     await runner.tick();
 
-    // Let the withdraw callbacks finalize.
-    await advanceTo(sb.rpcUrl, revealLanded + 5n * NS_PER_BLOCK, blockTimeNs);
+    // Let the withdraw callbacks finalize (a few more blocks).
+    const settleLanded = await currentBlockNs(sb.rpcUrl);
+    await advanceTo(sb.rpcUrl, settleLanded + 5n * NS_PER_BLOCK, blockTimeNs);
     chain.setNow(await currentBlockNs(sb.rpcUrl));
     await runner.tick();
 

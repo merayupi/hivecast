@@ -609,7 +609,17 @@ async function main(): Promise<void> {
         const q2 = await innerChain.getQuestion(questionId);
         assert.equal(q2?.phase, 'cancelled', `expected cancelled, got ${JSON.stringify(q2)}`);
       } else {
-        const q = await innerChain.getQuestion(questionId);
+        // Drive resolution with a bounded loop (the production daemon ticks
+        // repeatedly; a single tick at the boundary may submit before the
+        // block timestamp crosses resolve_time).
+        let q = await innerChain.getQuestion(questionId);
+        for (let i = 0; i < 8 && q?.phase !== 'resolved'; i++) {
+          const landed = await advanceTo(sb.rpcUrl, obsEnd + (2n + BigInt(i)) * NS_PER_BLOCK, blockTimeNs);
+          chain.setNow(landed);
+          const report = await runner.tick();
+          process.stdout.write(`source-boundary: ${mode} tick(${i}) steps=${JSON.stringify(report.steps)}\n`);
+          q = await innerChain.getQuestion(questionId);
+        }
         assert.equal(q?.phase, 'resolved', `expected resolved, got ${JSON.stringify(q)}`);
         assert.equal(q?.outcome, expect === 'yes', `outcome mismatch for ${mode}`);
       }
@@ -695,9 +705,20 @@ async function main(): Promise<void> {
       //    chain clock makes the equal open/close candle "completed" → NO.
       await advanceTo(sb.rpcUrl, local.resolveTimeNs + 2n * NS_PER_BLOCK, blockTimeNs);
       chain.setNow(await currentBlockNs(sb.rpcUrl));
-      await new Runner(config, chain, store).tick();
+      const priceRunner = new Runner(config, chain, store);
+      await priceRunner.tick();
 
-      const q = await innerChain.getQuestion(questionId);
+      // Drive resolution with a bounded loop (production daemon ticks
+      // repeatedly; a single tick may submit before the block time crosses
+      // resolve_time).
+      let q = await innerChain.getQuestion(questionId);
+      for (let i = 0; i < 8 && q?.phase !== 'resolved'; i++) {
+        const landed = await advanceTo(sb.rpcUrl, local.resolveTimeNs + (2n + BigInt(i)) * NS_PER_BLOCK, blockTimeNs);
+        chain.setNow(landed);
+        const report = await priceRunner.tick();
+        process.stdout.write(`source-boundary: price tick(${i}) steps=${JSON.stringify(report.steps)}\n`);
+        q = await innerChain.getQuestion(questionId);
+      }
       assert.equal(q?.phase, 'resolved', `expected resolved, got ${JSON.stringify(q)}`);
       assert.equal(q?.outcome, false, 'equal-close must resolve NO');
       store.close();
