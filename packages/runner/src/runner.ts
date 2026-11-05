@@ -19,7 +19,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { getStrategy, supportsDomain } from '@hivecast/core';
 import type { AgentId, Domain, StrategyContext, StrategyInputs } from '@hivecast/core';
 import { commitmentHash, generateSalt } from './commitment.js';
-import type { ChainClient, CallOutcome } from './chain/types.js';
+import type { ChainClient } from './chain/types.js';
 import type { RunnerConfig } from './config.js';
 import {
   nsToMs,
@@ -35,10 +35,9 @@ import {
   fetchWeatherHistoryDay,
   fetchWeatherResolution,
   type FetchBases,
-  type Evidence,
 } from './source.js';
 import type { Store } from './store.js';
-import type { ForecastRecord, JournalKind, LocalQuestion, SnapshotRecord } from './types.js';
+import type { ForecastRecord, JournalKind, LocalQuestion, QuestionView, SnapshotRecord } from './types.js';
 
 export interface StepResult {
   kind: string;
@@ -73,6 +72,70 @@ export interface SourceProvider {
 const STAKE_FLOOR_DENOM = 10n; // 10% of available balance
 const PRICE_LOOKBACK_CANDLES = 48;
 const WEATHER_HISTORY_DAYS = 30;
+
+/** Immutable operator create-question spec, persisted in full BEFORE broadcast. */
+export interface CreateQuestionSpec {
+  domain: Domain;
+  text: string;
+  eventDefinition: string;
+  sourceJson: string;
+  sourceLabel: string;
+  targetKey: string;
+  openTimeNs: bigint;
+  closeTimeNs: bigint;
+  observationStartNs: bigint;
+  observationEndNs: bigint;
+  resolveTimeNs: bigint;
+  resolveDeadlineNs: bigint;
+  revealWindowNs: bigint;
+}
+
+/**
+ * Grace past the latest possible reveal deadline after which a Question needs
+ * no more per-question runner phase work (commit/freeze/resolve/reveal/settle).
+ * Withdrawal is account-scoped and handled globally, so historical Rounds are
+ * never re-walked. Default price life ≈ open(15m)+obs(1h)+resolve/reveal(30m);
+ * 6h grace covers settle retries and daemon restarts while keeping the per-tick
+ * horizon bounded to a handful of Rounds.
+ */
+const LIFECYCLE_GRACE_NS = 6n * 3_600n * 1_000_000_000n;
+
+function serializeCreateSpec(spec: CreateQuestionSpec): string {
+  return JSON.stringify({
+    domain: spec.domain,
+    text: spec.text,
+    eventDefinition: spec.eventDefinition,
+    sourceJson: spec.sourceJson,
+    sourceLabel: spec.sourceLabel,
+    targetKey: spec.targetKey,
+    openTimeNs: spec.openTimeNs.toString(),
+    closeTimeNs: spec.closeTimeNs.toString(),
+    observationStartNs: spec.observationStartNs.toString(),
+    observationEndNs: spec.observationEndNs.toString(),
+    resolveTimeNs: spec.resolveTimeNs.toString(),
+    resolveDeadlineNs: spec.resolveDeadlineNs.toString(),
+    revealWindowNs: spec.revealWindowNs.toString(),
+  });
+}
+
+function deserializeCreateSpec(json: string): CreateQuestionSpec {
+  const r = JSON.parse(json) as Record<string, unknown>;
+  return {
+    domain: r.domain as Domain,
+    text: r.text as string,
+    eventDefinition: r.eventDefinition as string,
+    sourceJson: r.sourceJson as string,
+    sourceLabel: r.sourceLabel as string,
+    targetKey: r.targetKey as string,
+    openTimeNs: BigInt(r.openTimeNs as string),
+    closeTimeNs: BigInt(r.closeTimeNs as string),
+    observationStartNs: BigInt(r.observationStartNs as string),
+    observationEndNs: BigInt(r.observationEndNs as string),
+    resolveTimeNs: BigInt(r.resolveTimeNs as string),
+    resolveDeadlineNs: BigInt(r.resolveDeadlineNs as string),
+    revealWindowNs: BigInt(r.revealWindowNs as string),
+  };
+}
 
 /** Real source provider: completed candles / forecast runs / archive resolution. */
 export class LiveSourceProvider implements SourceProvider {
@@ -201,10 +264,9 @@ export class Runner {
     questionId: number | null,
     accountId: string | null,
     payload: unknown,
-    send: () => Promise<{ outcome: CallOutcome }>,
+    action: () => { methodName: string; args: Record<string, unknown>; signer: string; deposit: bigint; gas?: bigint },
     verify: () => Promise<boolean>,
   ): Promise<StepResult> {
-    // Persist intent BEFORE broadcast.
     const { alreadyConfirmed } = this.store.upsertJournal({
       dedupKey,
       kind,
@@ -213,30 +275,65 @@ export class Runner {
       payloadJson: JSON.stringify(payload),
     });
     if (alreadyConfirmed) {
+      this.store.deleteSignedTx(dedupKey);
       return { kind, questionId, accountId, sent: false, reason: 'already-confirmed', error: null };
     }
-    // Reconcile any pending/submitted entry against the chain before resending.
+
+    // Reconcile a previously prepared/submitted transaction against the chain
+    // BEFORE any new broadcast. While the outcome is uncertain, we rebroadcast
+    // the SAME signed transaction (same nonce/signature), never re-sign.
+    const signed = this.store.getSignedTx(dedupKey);
+    if (signed) {
+      if (await verify()) {
+        this.store.markConfirmed(dedupKey);
+        this.store.deleteSignedTx(dedupKey);
+        return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
+      }
+      const outcome = await this.chain.broadcastCall(signed.signedBytesBase64);
+      if (outcome.status === 'success') {
+        this.store.markConfirmed(dedupKey);
+        this.store.deleteSignedTx(dedupKey);
+        return { kind, questionId, accountId, sent: true, reason: 'rebroadcast-sent', error: null };
+      }
+      if (outcome.status === 'failure') {
+        // Definitively rejected/failed: it did not apply, so a fresh attempt is
+        // safe after this is cleared.
+        this.store.markFailed(dedupKey, outcome.error ?? 'unknown error');
+        this.store.deleteSignedTx(dedupKey);
+        return { kind, questionId, accountId, sent: false, reason: 'failed', error: outcome.error };
+      }
+      // Uncertain: keep the signed tx for the next reconcile; do NOT re-sign.
+      if (outcome.txHash) this.store.markSubmitted(dedupKey, outcome.txHash);
+      return { kind, questionId, accountId, sent: false, reason: 'rebroadcast-uncertain', error: outcome.error };
+    }
+
+    // No persisted signed tx: still reconcile a legacy 'submitted' entry.
     const existing = this.store.getJournal(dedupKey);
-    if (existing && (existing.status === 'pending' || existing.status === 'submitted')) {
+    if (existing && existing.status === 'submitted') {
       if (await verify()) {
         this.store.markConfirmed(dedupKey);
         return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
       }
     }
-    const { outcome } = await send();
-    if (outcome.success) {
-      if (outcome.txHash) this.store.markSubmitted(dedupKey, outcome.txHash);
+
+    // Fresh attempt: prepare the signed tx, persist it, THEN broadcast.
+    const a = action();
+    const prepared = await this.chain.prepareCall(a.methodName, a.args, a.signer, a.deposit, a.gas);
+    this.store.saveSignedTx(dedupKey, prepared.signedBytesBase64, prepared.txHash, prepared.nonce);
+    this.store.markSubmitted(dedupKey, prepared.txHash);
+    const outcome = await this.chain.broadcastCall(prepared.signedBytesBase64);
+    if (outcome.status === 'success') {
       this.store.markConfirmed(dedupKey);
+      this.store.deleteSignedTx(dedupKey);
       return { kind, questionId, accountId, sent: true, reason: 'sent', error: null };
     }
-    if (outcome.txHash) {
-      // Included but unproven execution: record the hash so a restart
-      // reconciles by re-verifying against the chain before any resend.
-      this.store.markSubmitted(dedupKey, outcome.txHash);
-      return { kind, questionId, accountId, sent: false, reason: 'submitted-unconfirmed', error: outcome.error };
+    if (outcome.status === 'failure') {
+      this.store.markFailed(dedupKey, outcome.error ?? 'unknown error');
+      this.store.deleteSignedTx(dedupKey);
+      return { kind, questionId, accountId, sent: false, reason: 'failed', error: outcome.error };
     }
-    this.store.markFailed(dedupKey, outcome.error ?? 'unknown error');
-    return { kind, questionId, accountId, sent: false, reason: 'failed', error: outcome.error };
+    // Uncertain: keep the signed tx so the next reconcile rebroadcasts it.
+    return { kind, questionId, accountId, sent: false, reason: 'submitted-unconfirmed', error: outcome.error };
   }
 
   // -------------------------------------------------------------------------
@@ -292,7 +389,12 @@ export class Runner {
       q.questionId,
       accountId,
       { probBps: forecast.probBps, stake: forecast.stakeYocto.toString() },
-      async () => ({ outcome: await this.chain.commit(q.questionId, forecast!.commitmentHash, forecast!.stakeYocto, accountId) }),
+      () => ({
+        methodName: 'commit',
+        args: { question_id: q.questionId, hash: forecast!.commitmentHash },
+        signer: accountId,
+        deposit: forecast!.stakeYocto,
+      }),
       verify,
     );
     // On confirmed commit the deposit has left the wallet: release reservation.
@@ -383,7 +485,12 @@ export class Runner {
         q.questionId,
         null,
         { snapshotId: snapshot.snapshotId },
-        async () => ({ outcome: await this.chain.publishSnapshot(q.questionId, snapshot!.snapshotId, this.config.operatorId) }),
+        () => ({
+          methodName: 'publish_snapshot',
+          args: { question_id: q.questionId, snapshot_id: snapshot!.snapshotId },
+          signer: this.config.operatorId,
+          deposit: 0n,
+        }),
         async () => (await this.chain.getQuestion(q.questionId))?.snapshot_id === snapshot!.snapshotId,
       ),
     ];
@@ -403,7 +510,12 @@ export class Runner {
             q.questionId,
             null,
             { reason: 'timeout' },
-            async () => ({ outcome: await this.chain.cancel(q.questionId, this.config.operatorId) }),
+            () => ({
+              methodName: 'cancel',
+              args: { question_id: q.questionId },
+              signer: this.config.operatorId,
+              deposit: 0n,
+            }),
             async () => (await this.chain.getQuestion(q.questionId))?.phase === 'cancelled',
           ),
         ];
@@ -419,7 +531,12 @@ export class Runner {
         q.questionId,
         null,
         { outcome: resolution.outcome },
-        async () => ({ outcome: await this.chain.resolve(q.questionId, resolution.outcome, this.config.resolverId) }),
+        () => ({
+          methodName: 'resolve',
+          args: { question_id: q.questionId, outcome: resolution.outcome },
+          signer: this.config.resolverId,
+          deposit: 0n,
+        }),
         async () => (await this.chain.getQuestion(q.questionId))?.outcome !== null,
       ),
     ];
@@ -439,7 +556,12 @@ export class Runner {
           q.questionId,
           p.accountId,
           { probBps: f.probBps },
-          async () => ({ outcome: await this.chain.reveal(q.questionId, f.probBps, f.salt, p.accountId) }),
+          () => ({
+            methodName: 'reveal',
+            args: { question_id: q.questionId, prob_bps: f.probBps, salt: f.salt },
+            signer: p.accountId,
+            deposit: 0n,
+          }),
           async () => (await this.chain.getCommitment(q.questionId, p.accountId))?.revealed === f.probBps,
         ),
       );
@@ -447,33 +569,45 @@ export class Runner {
     return steps;
   }
 
-  private async withdrawForAccount(q: LocalQuestion, accountId: string): Promise<StepResult> {
+  private async withdrawAccount(accountId: string): Promise<StepResult | null> {
     const balance = await this.chain.getBalance(accountId);
     const claimable = BigInt(balance.claimable);
-    if (claimable <= 0n) {
-      return { kind: 'withdraw', questionId: q.questionId, accountId, sent: false, reason: 'nothing-claimable', error: null };
-    }
-    if (BigInt(balance.pending) > 0n) {
-      return { kind: 'withdraw', questionId: q.questionId, accountId, sent: false, reason: 'pending-in-flight', error: null };
-    }
+    if (claimable <= 0n) return null;
+    if (BigInt(balance.pending) > 0n) return null; // in-flight; wait for callback
     const amount = claimable;
     const attempt = this.store.nextWithdrawAttempt(accountId, amount);
     const dedupKey = `withdraw:${accountId}:${amount.toString()}:${attempt}`;
     return this.runOnce(
       dedupKey,
       'withdraw',
-      q.questionId,
+      null,
       accountId,
       { amount: amount.toString() },
-      async () => ({ outcome: await this.chain.withdraw(amount, accountId) }),
+      () => ({
+        methodName: 'withdraw',
+        args: { amount: amount.toString() },
+        signer: accountId,
+        deposit: 0n,
+      }),
       async () => BigInt((await this.chain.getBalance(accountId)).claimable) < amount,
     );
   }
 
-  private async terminalWithdrawals(q: LocalQuestion): Promise<StepResult[]> {
+  /**
+   * Global bounded withdrawal sweep: poll the 8 agent accounts once per tick
+   * (not one full ledger walk per historical Round). Claimable balance is
+   * account-scoped in the contract, so this drains every settled/cancelled
+   * Round's entitlement without revisiting each Round.
+   */
+  private async withdrawAllAgents(): Promise<StepResult[]> {
     const steps: StepResult[] = [];
-    for (const p of q.participants) {
-      steps.push(await this.withdrawForAccount(q, p.accountId));
+    const seen = new Set<string>();
+    for (const id of Object.keys(this.config.agentAccounts) as AgentId[]) {
+      const accountId = this.config.agentAccounts[id];
+      if (seen.has(accountId)) continue;
+      seen.add(accountId);
+      const step = await this.withdrawAccount(accountId);
+      if (step) steps.push(step);
     }
     return steps;
   }
@@ -482,14 +616,23 @@ export class Runner {
   // Public orchestration
   // -------------------------------------------------------------------------
 
+  /** Advance one locally-tracked question through its current lifecycle step. */
   async advance(q: LocalQuestion): Promise<StepResult[]> {
     const chainQuestion = await this.chain.getQuestion(q.questionId);
     if (!chainQuestion) {
       return [{ kind: 'advance', questionId: q.questionId, accountId: null, sent: false, reason: 'not-on-chain', error: null }];
     }
+    const now = this.nowNs();
     switch (chainQuestion.phase) {
-      case 'open':
+      case 'open': {
+        // The contract reports `open` for a scheduled Question too (before
+        // open_time). Do not fetch source or sign until the window actually
+        // opens, or the daemon would burn agent gas committing too early.
+        if (now < q.openTimeNs) {
+          return [{ kind: 'commit', questionId: q.questionId, accountId: null, sent: false, reason: 'not-open-yet', error: null }];
+        }
         return this.commitPhase(q);
+      }
       case 'closed': {
         const steps: StepResult[] = [];
         const commits = await this.chain.listCommitments(q.questionId, 0, 64);
@@ -502,7 +645,12 @@ export class Runner {
               q.questionId,
               null,
               { reason: 'zero-commitments' },
-              async () => ({ outcome: await this.chain.cancel(q.questionId, this.config.operatorId) }),
+              () => ({
+                methodName: 'cancel',
+                args: { question_id: q.questionId },
+                signer: this.config.operatorId,
+                deposit: 0n,
+              }),
               async () => (await this.chain.getQuestion(q.questionId))?.phase === 'cancelled',
             ),
           );
@@ -516,124 +664,209 @@ export class Runner {
         steps.push(...(await this.resolvePhase(q)));
         return steps;
       }
-      case 'resolved':
-        return this.revealPhase(q);
+      case 'resolved': {
+        const steps: StepResult[] = [];
+        steps.push(...(await this.revealPhase(q)));
+        // Settle once the reveal deadline has passed (permissionless).
+        const revealDeadline = chainQuestion.reveal_deadline;
+        if (revealDeadline !== null && now >= BigInt(revealDeadline)) {
+          steps.push(
+            await this.runOnce(
+              `settle:${q.questionId}`,
+              'settle',
+              q.questionId,
+              null,
+              {},
+              () => ({
+                methodName: 'settle',
+                args: { question_id: q.questionId },
+                signer: this.config.operatorId,
+                deposit: 0n,
+              }),
+              async () => (await this.chain.getQuestion(q.questionId))?.phase === 'settled',
+            ),
+          );
+        }
+        return steps;
+      }
       case 'settled':
       case 'cancelled':
-        return this.terminalWithdrawals(q);
+        // Claimable balances are drained by the global account sweep, not here.
+        return [];
       default:
         return [];
     }
   }
 
-  /** Reconcile any create_question intents whose broadcast crashed before local save. */
+  /** Walk the full (paginated) on-chain question list. */
+  private async listAllChainQuestions(): Promise<QuestionView[]> {
+    const out: QuestionView[] = [];
+    const pageSize = 100;
+    for (let from = 0; ; from += pageSize) {
+      const page = await this.chain.listQuestions(from, pageSize);
+      out.push(...page);
+      if (page.length < pageSize) break;
+    }
+    return out;
+  }
+
+  /** Exact on-chain match for a create spec (domain/source + observation window). */
+  private matchesSpec(q: QuestionView, spec: CreateQuestionSpec): boolean {
+    return (
+      q.source === spec.sourceJson &&
+      q.observation_start === spec.observationStartNs.toString() &&
+      q.observation_end === spec.observationEndNs.toString()
+    );
+  }
+
+  /** Reconcile create_question intents against the FULL paginated chain history. */
   private async reconcileCreates(): Promise<void> {
-    const entries = this.store.listJournal('create_question').filter((j) => j.status === 'pending' || j.status === 'submitted');
+    const entries = this.store
+      .listJournal('create_question')
+      .filter((j) => j.status === 'pending' || j.status === 'submitted' || j.status === 'failed');
+    if (entries.length === 0) return;
+
+    // Fetch the full history once, then resolve every pending/submitted/failed
+    // intent by exact domain/source/spec match (not just time).
+    const all = await this.listAllChainQuestions();
     for (const e of entries) {
-      const payload = JSON.parse(e.payloadJson) as { observation_start?: string };
-      const obsStart = payload.observation_start;
-      if (!obsStart) continue;
-      const questions = await this.chain.listQuestions(0, 100);
-      const match = questions.find((q) => q.observation_start === obsStart);
-      if (match) {
-        this.store.markConfirmed(e.dedupKey);
+      let spec: CreateQuestionSpec;
+      try {
+        spec = deserializeCreateSpec(e.payloadJson);
+      } catch {
+        continue; // malformed legacy intent; leave untouched
       }
+      const match = all.find((q) => this.matchesSpec(q, spec));
+      if (!match) continue;
+      // Recover the local record AND the question id, then confirm.
+      const participants = this.participantsFor(spec.domain);
+      this.store.saveQuestion(this.toLocalQuestion(match.question_id, spec, participants), spec.targetKey);
+      this.store.markConfirmed(e.dedupKey);
+      this.store.deleteSignedTx(e.dedupKey);
     }
   }
 
-  /** One pass over all locally-tracked questions. */
+  /** One pass: reconcile creates, advance active rounds, drain global balances. */
   async tick(): Promise<TickReport> {
     await this.reconcileCreates();
     const steps: StepResult[] = [];
-    const questions = this.store.listQuestions();
-    for (const q of questions) {
+    const now = this.nowNs();
+    for (const q of this.store.listQuestions()) {
+      // Historical (durable-finalized) Rounds are inactive: skip anything whose
+      // last possible reveal/settle deadline has passed. Withdrawal is global.
+      if (now >= q.resolveDeadlineNs + q.revealWindowNs + LIFECYCLE_GRACE_NS) continue;
       steps.push(...(await this.advance(q)));
     }
+    steps.push(...(await this.withdrawAllAgents()));
     return { steps };
   }
 
   /**
    * Operator action: create a Question on-chain and persist it locally.
-   * The intent is journaled (keyed by targetKey) BEFORE broadcast so a restart
-   * never double-creates; reconciliation is by durable targetKey + pinned
-   * on-chain observation_start.
+   * The full immutable spec is journaled (keyed by targetKey) BEFORE broadcast
+   * so a restart never double-creates; the prepared signed transaction is
+   * persisted before broadcast and rebroadcast-same-signed-tx while uncertain.
    */
-  async createQuestion(params: {
-    domain: Domain;
-    text: string;
-    eventDefinition: string;
-    sourceJson: string;
-    sourceLabel: string;
-    targetKey: string;
-    openTimeNs: bigint;
-    closeTimeNs: bigint;
-    observationStartNs: bigint;
-    observationEndNs: bigint;
-    resolveTimeNs: bigint;
-    resolveDeadlineNs: bigint;
-    revealWindowNs: bigint;
-  }): Promise<{ questionId: number | null; alreadyExists: boolean; error: string | null }> {
+  async createQuestion(
+    params: CreateQuestionSpec,
+  ): Promise<{ questionId: number | null; alreadyExists: boolean; error: string | null }> {
     const existingLocal = this.store.getQuestionByTargetKey(params.targetKey);
     if (existingLocal) {
       return { questionId: existingLocal.questionId, alreadyExists: true, error: null };
     }
     const participants = this.participantsFor(params.domain);
     const dedupKey = `create_question:${params.targetKey}`;
+
+    // If a previous broadcast is already on-chain (full spec match), recover the
+    // local record before doing anything else.
+    const all = await this.listAllChainQuestions();
+    const onChain = all.find((q) => this.matchesSpec(q, params));
+    if (onChain) {
+      const local = this.toLocalQuestion(onChain.question_id, params, participants);
+      this.store.saveQuestion(local, params.targetKey);
+      this.store.markConfirmed(dedupKey);
+      this.store.deleteSignedTx(dedupKey);
+      return { questionId: onChain.question_id, alreadyExists: true, error: null };
+    }
+
     const intent = this.store.upsertJournal({
       dedupKey,
       kind: 'create_question',
       questionId: null,
       accountId: this.config.operatorId,
-      payloadJson: JSON.stringify({ observation_start: params.observationStartNs.toString() }),
+      payloadJson: serializeCreateSpec(params),
     });
     if (intent.alreadyConfirmed) {
-      // Recovered on a prior run but local row missing: rebuild from chain.
-      const questions = await this.chain.listQuestions(0, 100);
-      const match = questions.find((qq) => qq.observation_start === params.observationStartNs.toString());
-      if (match) {
-        const local = this.toLocalQuestion(match.question_id, params, participants);
-        this.store.saveQuestion(local, params.targetKey);
-        return { questionId: match.question_id, alreadyExists: true, error: null };
-      }
-      return { questionId: null, alreadyExists: false, error: 'create_question marked confirmed but question not found on chain' };
+      // Recover local row from chain (already matched above).
+      return { questionId: null, alreadyExists: false, error: 'create_question confirmed but question not found on chain' };
     }
-    const outcome = await this.chain.createQuestion(
-      {
-        text: params.text,
-        event_definition: params.eventDefinition,
-        source: params.sourceJson,
-        resolver: this.config.resolverId,
-        open_time: params.openTimeNs.toString(),
-        close_time: params.closeTimeNs.toString(),
-        observation_start: params.observationStartNs.toString(),
-        observation_end: params.observationEndNs.toString(),
-        resolve_time: params.resolveTimeNs.toString(),
-        resolve_deadline: params.resolveDeadlineNs.toString(),
-        reveal_window: params.revealWindowNs.toString(),
-        access_price: this.config.accessPriceYocto.toString(),
-        min_stake: this.config.minStakeYocto.toString(),
-      },
+
+    // Reconcile a previously prepared signed tx before any new signing.
+    const signed = this.store.getSignedTx(dedupKey);
+    if (signed) {
+      const outcome = await this.chain.broadcastCall(signed.signedBytesBase64);
+      if (outcome.status === 'success' && typeof outcome.result === 'number') {
+        const questionId = outcome.result as number;
+        this.store.markConfirmed(dedupKey);
+        this.store.deleteSignedTx(dedupKey);
+        const local = this.toLocalQuestion(questionId, params, participants);
+        this.store.saveQuestion(local, params.targetKey);
+        return { questionId, alreadyExists: false, error: null };
+      }
+      if (outcome.status === 'failure') {
+        this.store.markFailed(dedupKey, outcome.error ?? 'unknown error');
+        this.store.deleteSignedTx(dedupKey);
+        return { questionId: null, alreadyExists: false, error: outcome.error };
+      }
+      // Uncertain: keep signed tx; do NOT re-sign. Reconcile will rebroadcast.
+      return { questionId: null, alreadyExists: false, error: 'create_question broadcast uncertain; will rebroadcast same signed tx' };
+    }
+
+    // Fresh attempt: prepare + persist the signed tx, then broadcast.
+    const prepared = await this.chain.prepareCall(
+      'create_question',
+      { spec: {
+          text: params.text,
+          event_definition: params.eventDefinition,
+          source: params.sourceJson,
+          resolver: this.config.resolverId,
+          open_time: params.openTimeNs.toString(),
+          close_time: params.closeTimeNs.toString(),
+          observation_start: params.observationStartNs.toString(),
+          observation_end: params.observationEndNs.toString(),
+          resolve_time: params.resolveTimeNs.toString(),
+          resolve_deadline: params.resolveDeadlineNs.toString(),
+          reveal_window: params.revealWindowNs.toString(),
+          access_price: this.config.accessPriceYocto.toString(),
+          min_stake: this.config.minStakeYocto.toString(),
+        } },
       this.config.operatorId,
+      0n,
     );
-    if (outcome.success && typeof outcome.result === 'number') {
-      if (outcome.txHash) this.store.markSubmitted(dedupKey, outcome.txHash);
-      this.store.markConfirmed(dedupKey);
+    this.store.saveSignedTx(dedupKey, prepared.signedBytesBase64, prepared.txHash, prepared.nonce);
+    this.store.markSubmitted(dedupKey, prepared.txHash);
+
+    const outcome = await this.chain.broadcastCall(prepared.signedBytesBase64);
+    if (outcome.status === 'success' && typeof outcome.result === 'number') {
       const questionId = outcome.result as number;
+      this.store.markConfirmed(dedupKey);
+      this.store.deleteSignedTx(dedupKey);
       const local = this.toLocalQuestion(questionId, params, participants);
       this.store.saveQuestion(local, params.targetKey);
       return { questionId, alreadyExists: false, error: null };
     }
-    if (outcome.txHash) {
-      this.store.markSubmitted(dedupKey, outcome.txHash);
-    } else {
+    if (outcome.status === 'failure') {
       this.store.markFailed(dedupKey, outcome.error ?? 'create_question failed');
+      this.store.deleteSignedTx(dedupKey);
+      return { questionId: null, alreadyExists: false, error: outcome.error };
     }
-    return { questionId: null, alreadyExists: false, error: outcome.error ?? 'create_question returned no id' };
+    // Uncertain: keep the signed tx so the next tick/restart rebroadcasts it.
+    return { questionId: null, alreadyExists: false, error: 'create_question broadcast uncertain; will rebroadcast same signed tx' };
   }
 
   private toLocalQuestion(
     questionId: number,
-    params: { domain: Domain; text: string; eventDefinition: string; sourceJson: string; sourceLabel: string; openTimeNs: bigint; closeTimeNs: bigint; observationStartNs: bigint; observationEndNs: bigint; resolveTimeNs: bigint; resolveDeadlineNs: bigint; revealWindowNs: bigint },
+    params: CreateQuestionSpec,
     participants: { agentId: AgentId; accountId: string }[],
   ): LocalQuestion {
     return {
