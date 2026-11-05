@@ -39,6 +39,21 @@ export interface RunnerConfig {
   /** In-flight gas reserve kept out of stake sizing (yoctoNEAR). */
   operationalGasReserveYocto: bigint;
   http: { enabled: boolean; host: string; port: number };
+  /** Forecast Access authentication + delivery (ticket #5). */
+  access: {
+    /** HttpOnly session lifetime (ms). */
+    sessionTtlMs: number;
+    /** One-use NEP-413 challenge lifetime (ms). */
+    challengeTtlMs: number;
+    /** Session cookie name. */
+    cookieName: string;
+    /** Set the Secure flag (true when served over https). */
+    cookieSecure: boolean;
+    /** Service identity embedded in the signed challenge message. */
+    serviceDomain: string;
+    /** Allowed browser Origins (CORS + CSRF binding for the Vite proxy). */
+    allowedOrigins: string[];
+  };
   /** Deterministic credential override map (secret keys injected, not files). */
   credentials?: Record<string, string>;
 }
@@ -94,6 +109,10 @@ export function loadConfig(path: string): RunnerConfig {
 
   const httpRaw = (c.http ?? {}) as Record<string, unknown>;
   const credentials = c.credentials as Record<string, string> | undefined;
+  const accessRaw = (c.access ?? {}) as Record<string, unknown>;
+  const allowedOrigins = Array.isArray(accessRaw.allowedOrigins)
+    ? (accessRaw.allowedOrigins as unknown[]).map((o) => String(o))
+    : ['http://localhost:5173'];
 
   return {
     networkId: requireString(c.networkId, 'networkId'),
@@ -125,6 +144,14 @@ export function loadConfig(path: string): RunnerConfig {
       enabled: httpRaw.enabled === true,
       host: typeof httpRaw.host === 'string' ? httpRaw.host : '127.0.0.1',
       port: typeof httpRaw.port === 'number' ? httpRaw.port : 8787,
+    },
+    access: {
+      sessionTtlMs: typeof accessRaw.sessionTtlMs === 'number' ? accessRaw.sessionTtlMs : 86_400_000,
+      challengeTtlMs: typeof accessRaw.challengeTtlMs === 'number' ? accessRaw.challengeTtlMs : 300_000,
+      cookieName: typeof accessRaw.cookieName === 'string' ? accessRaw.cookieName : 'hivecast_session',
+      cookieSecure: accessRaw.cookieSecure === true,
+      serviceDomain: typeof accessRaw.serviceDomain === 'string' ? accessRaw.serviceDomain : 'hivecast',
+      allowedOrigins,
     },
     credentials,
   };

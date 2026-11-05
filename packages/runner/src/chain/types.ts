@@ -77,6 +77,14 @@ export interface ChainClient {
   listPendingWithdrawals(accountId: string, fromIndex: number, limit: number): Promise<PendingWithdrawalView[]>;
   /** Native NEAR balance of an account (yoctoNEAR). */
   viewAccountBalance(accountId: string): Promise<bigint>;
+  /**
+   * Finalized permission of an account access key: `full-access` | `function-call`,
+   * or `null` when the account or key definitively does not exist (fail-closed,
+   * not ownership proof). Throws `ChainUnavailableError` when the RPC/chain is
+   * transiently unavailable — the caller must map that to unavailable, never to
+   * a silently-suppressed "no proof".
+   */
+  viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null>;
 
   /**
    * Build + sign a contract call WITHOUT broadcasting. Persisting its bytes
