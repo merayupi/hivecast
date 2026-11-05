@@ -29,7 +29,7 @@ import { Store } from '../src/store.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.resolve(HERE, '..', 'src', 'cli.ts');
 const CONTRACT = process.env.HIVECAST_RUNNER_CONTRACT ?? 'hivecast-market-6c4d.testnet';
-const RPC = process.env.HIVECAST_RUNNER_RPC ?? 'https://rpc.testnet.near.org';
+const RPC = process.env.HIVECAST_RUNNER_RPC ?? 'https://archival-rpc.testnet.near.org';
 
 function configJson(dbPath: string): string {
   const agentAccounts: Record<string, string> = {};

@@ -127,15 +127,18 @@ charge. A lost private snapshot or RPC failure returns `snapshot_unavailable`
 
 ### Access proof surface
 
-- **`test/access.test.ts`** — boundary tests for the auth/delivery semantics
-  (replay, expiry, wrong context, function-call key, concurrency,
-  honest-unavailable) at the HTTP seam. They use a controllable chain adapter
-  and genuine near-api-js Ed25519 NEP-413 signatures; they do **not** claim a
-  real contract purchase or a real FullAccess key on a live chain.
+Forecast Access is verified at the approved public product-lifecycle seam only
+— no fake contract/mock-chain class exists in the test suite.
+
 - **`harness/access-sandbox.ts`** (`npm run sandbox:access`, Linux only) — the
-  real purchase proof. It deploys the actual contract WASM to a real
-  `near-sandbox` node and drives `create_question → commit → publish_snapshot →
-  buy_forecast → NEP-413 login → frozen snapshot delivery` with ephemeral keys.
+  real purchase + auth proof. It deploys the actual contract WASM to a real
+  `near-sandbox` node and, over the public HTTP service with ephemeral keys,
+  proves: `create_question → commit → publish_snapshot → buy_forecast` (real
+  purchase) → NEP-413 login → frozen Snapshot delivery, plus the fail-closed
+  negatives: non-purchasing account (403), no session (401), replay (401),
+  expiry (401), wrong service context (401), wrong recipient/invalid signature
+  (401), function-call key (401), concurrent single-consumption, and missing
+  private snapshot (503).
 - **`harness/auth-smoke.ts`** (`npm run smoke:auth`) — real-testnet NEP-413
   FullAccess login only; it does **not** purchase anything and reports the
   honest `not_purchased` result (no fabricated purchase proof).
@@ -173,7 +176,7 @@ and `allowedOrigins` (CORS + CSRF binding for the Vite proxy).
 ## Package scripts
 
 ```sh
-npm run test --workspace @hivecast/runner          # seam tests (CLI/HTTP/real RPC + Forecast Access boundary)
+npm run test --workspace @hivecast/runner          # seam tests (CLI/HTTP/real RPC)
 npm run typecheck --workspace @hivecast/runner
 npm run cli --workspace @hivecast/runner -- create-price <hourStartMs>
 npm run cli --workspace @hivecast/runner -- create-weather <YYYY-MM-DD>
