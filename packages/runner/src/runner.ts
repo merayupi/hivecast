@@ -129,7 +129,13 @@ function deserializeCreateSpec(json: string): CreateQuestionSpec {
 
 /** Real source provider: completed candles / forecast runs / archive resolution. */
 export class LiveSourceProvider implements SourceProvider {
-  constructor(private config: RunnerConfig) {}
+  private config: RunnerConfig;
+  private nowProvider: () => bigint;
+
+  constructor(config: RunnerConfig, nowNs?: () => bigint) {
+    this.config = config;
+    this.nowProvider = nowNs ?? (() => BigInt(Date.now()) * 1_000_000n);
+  }
 
   private bases(): FetchBases {
     return {
@@ -189,7 +195,7 @@ export class LiveSourceProvider implements SourceProvider {
   }
 
   private nowNs(): bigint {
-    return BigInt(Date.now()) * 1_000_000n;
+    return this.nowProvider();
   }
 }
 
@@ -203,7 +209,7 @@ export class Runner {
     this.config = config;
     this.chain = chain;
     this.store = store;
-    this.source = source ?? new LiveSourceProvider(config);
+    this.source = source ?? new LiveSourceProvider(config, () => chain.nowNs());
   }
 
   private nowNs(): bigint {
@@ -275,13 +281,13 @@ export class Runner {
     const signed = this.store.getSignedTx(dedupKey);
     if (signed) {
       if (await verify()) {
-        this.store.markConfirmed(dedupKey);
+        this.store.markConfirmed(dedupKey, signed.txHash);
         this.store.deleteSignedTx(dedupKey);
         return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
       }
       const outcome = await this.chain.broadcastCall(signed.signedBytesBase64);
       if (outcome.status === 'success') {
-        this.store.markConfirmed(dedupKey);
+        this.store.markConfirmed(dedupKey, outcome.txHash ?? signed.txHash);
         this.store.deleteSignedTx(dedupKey);
         return { kind, questionId, accountId, sent: true, reason: 'rebroadcast-sent', error: null };
       }
@@ -313,7 +319,7 @@ export class Runner {
     this.store.markSubmitted(dedupKey, prepared.txHash);
     const outcome = await this.chain.broadcastCall(prepared.signedBytesBase64);
     if (outcome.status === 'success') {
-      this.store.markConfirmed(dedupKey);
+      this.store.markConfirmed(dedupKey, outcome.txHash ?? prepared.txHash);
       this.store.deleteSignedTx(dedupKey);
       return { kind, questionId, accountId, sent: true, reason: 'sent', error: null };
     }
@@ -800,7 +806,7 @@ export class Runner {
       const outcome = await this.chain.broadcastCall(signed.signedBytesBase64);
       if (outcome.status === 'success' && typeof outcome.result === 'number') {
         const questionId = outcome.result as number;
-        this.store.markConfirmed(dedupKey);
+        this.store.markConfirmed(dedupKey, outcome.txHash ?? signed.txHash);
         this.store.deleteSignedTx(dedupKey);
         const local = this.toLocalQuestion(questionId, params, participants);
         this.store.saveQuestion(local, params.targetKey);
@@ -842,7 +848,7 @@ export class Runner {
     const outcome = await this.chain.broadcastCall(prepared.signedBytesBase64);
     if (outcome.status === 'success' && typeof outcome.result === 'number') {
       const questionId = outcome.result as number;
-      this.store.markConfirmed(dedupKey);
+      this.store.markConfirmed(dedupKey, outcome.txHash ?? prepared.txHash);
       this.store.deleteSignedTx(dedupKey);
       const local = this.toLocalQuestion(questionId, params, participants);
       this.store.saveQuestion(local, params.targetKey);

@@ -38,6 +38,10 @@ export interface RunnerConfig {
   kudusTimezone: string;
   /** In-flight gas reserve kept out of stake sizing (yoctoNEAR). */
   operationalGasReserveYocto: bigint;
+  /** Per-RPC-request timeout (ms) for read-only public views. A hanging/rate-
+   * limited endpoint must surface as unavailable, never block a request
+   * unbounded. Applied to view/native/tx/access-key reads. */
+  rpcTimeoutMs: number;
   http: { enabled: boolean; host: string; port: number };
   /** Forecast Access authentication + delivery (ticket #5). */
   access: {
@@ -140,6 +144,7 @@ export function loadConfig(path: string): RunnerConfig {
     operationalGasReserveYocto: c.operationalGasReserveYocto === undefined
       ? 50_000_000_000_000_000_000_000n // 0.05 NEAR
       : parseNonNegativeBigInt(c.operationalGasReserveYocto, 'operationalGasReserveYocto'),
+    rpcTimeoutMs: typeof c.rpcTimeoutMs === 'number' && c.rpcTimeoutMs > 0 ? c.rpcTimeoutMs : 15_000,
     http: {
       enabled: httpRaw.enabled === true,
       host: typeof httpRaw.host === 'string' ? httpRaw.host : '127.0.0.1',
