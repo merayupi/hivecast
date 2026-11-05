@@ -584,9 +584,14 @@ async function main(): Promise<void> {
       const date = wibDateOfUtcMs(targetDateWibMs);
       // PRODUCTION weather schedule (opening prev-day 18:00 WIB, cutoff 23:55 WIB).
       const schedule = computeWeatherSchedule(targetDateWibMs);
-      fixture.setMode(mode);
+      // For `missing-resolve`, the pre-cutoff INPUTS (forecast + archive
+      // history) must be VALID so the specialists commit normally; the source
+      // outage only begins at the RESOLUTION stage. Start with a valid mode for
+      // the commit, then switch to `missing-resolve` before the resolve tick.
+      const commitMode: FixtureMode = mode === 'missing-resolve' ? 'weather-above' : mode;
+      fixture.setMode(commitMode);
       fixture.setDate(date);
-      process.stdout.write(`source-boundary: ${mode} target=${date} open=${schedule.openTimeNs}\n`);
+      process.stdout.write(`source-boundary: ${mode} target=${date} open=${schedule.openTimeNs} commitMode=${commitMode}\n`);
 
       const config = buildConfig();
       const innerChain = new NearChainClient(config);
@@ -647,16 +652,25 @@ async function main(): Promise<void> {
 
       // Advance the sandbox into the commitment window and commit the meteo
       // agent via the production runner (fetches strategy inputs from the
-      // fixture's /v1/forecast). At least one commitment avoids the contract's
-      // zero-commitments cancel path and exercises real resolution.
+      // fixture's /v1/forecast + archive history). At least one commitment
+      // avoids the contract's zero-commitments cancel path and exercises real
+      // resolution.
       const openTimeNs = local.openTimeNs;
       await advanceTo(sb.rpcUrl, openTimeNs + 2n * NS_PER_BLOCK, blockTimeNs);
       chain.setNow(await currentBlockNs(sb.rpcUrl));
       const commitRunner = new Runner(config, chain, store);
-      await commitRunner.tick();
+      const commitReport = await commitRunner.tick();
+      process.stdout.write(`source-boundary: ${mode} commit steps=${JSON.stringify(commitReport.steps)}\n`);
 
       const commitsAfterOpen = await innerChain.listCommitments(questionId, 0, 64);
       assert.ok(commitsAfterOpen.length >= 1, `expected >=1 commitment, got ${commitsAfterOpen.length}`);
+
+      // Begin the RESOLUTION-stage source outage only AFTER the commit is
+      // accepted: switch the fixture so /v1/archive (the resolve fetch) 404s,
+      // while the already-persisted inputs/forecast remain intact.
+      if (mode === 'missing-resolve') {
+        fixture.setMode('missing-resolve');
+      }
 
       const obsEnd = local.observationEndNs;
       await advanceTo(sb.rpcUrl, obsEnd + 2n * NS_PER_BLOCK, blockTimeNs);
