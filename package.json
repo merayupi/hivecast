@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "HiveCast: forecast wagering demo — offline replay and strategy core.",
+  "description": "HiveCast: forecast wagering demo — NEAR testnet contract, autonomous runner, forecast access, offline replay, and dashboard.",
   "workspaces": [
     "packages/*"
   ],
