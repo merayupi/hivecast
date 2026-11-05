@@ -40,6 +40,15 @@ export interface CallOutcome {
    * SAME business intent (never re-sign an arbitrary timeout).
    */
   nonceStale?: boolean;
+  /**
+   * True when the chain DEFINITIVELY rejected this transaction with a
+   * TransactionExpiredError (the signed tx's blockHash reference went stale —
+   * e.g. a sandbox fast-forward produced many blocks between prepare and
+   * rebroadcast). The transaction was NOT included and will NEVER be accepted
+   * on rebroadcast of the same signed bytes. The caller must re-prepare a
+   * FRESH signed tx (new blockHash) for the SAME intent.
+   */
+  txExpired?: boolean;
 }
 
 /** A prepared, signed-but-not-broadcast transaction. */

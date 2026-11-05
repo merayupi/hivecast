@@ -291,8 +291,9 @@ export class Runner {
         this.store.deleteSignedTx(dedupKey);
         return { kind, questionId, accountId, sent: true, reason: 'rebroadcast-sent', error: null };
       }
-      if (outcome.nonceStale) {
-        // Definitive InvalidNonceError: the stale-nonce tx was NOT included.
+      if (outcome.nonceStale || outcome.txExpired) {
+        // Definitive pre-inclusion rejection (stale nonce OR expired blockHash):
+        // the tx was NOT included and will never be accepted on rebroadcast.
         // Reconcile the postcondition first (the original intent may already
         // have landed via a lost response), then evict the nonce cache and
         // re-prepare a FRESH signed tx for the SAME intent.
@@ -350,9 +351,10 @@ export class Runner {
       this.store.deleteSignedTx(dedupKey);
       return { kind, questionId, accountId, sent: true, reason: 'sent', error: null };
     }
-    if (outcome.nonceStale) {
-      // Still stale after eviction: a concurrent signer keeps racing. Keep the
-      // freshly prepared bytes and let the next tick reconcile/re-prepare.
+    if (outcome.nonceStale || outcome.txExpired) {
+      // Still stale/expired after eviction (a concurrent signer keeps racing, or
+      // the chain keeps advancing). Keep the freshly prepared bytes and let the
+      // next tick reconcile/re-prepare.
       this.store.markSubmitted(dedupKey, prepared.txHash);
       return { kind, questionId, accountId, sent: false, reason: 'nonce-stale-retry', error: outcome.error };
     }
@@ -845,8 +847,8 @@ export class Runner {
         this.store.saveQuestion(local, params.targetKey);
         return { questionId, alreadyExists: false, error: null };
       }
-      if (outcome.nonceStale) {
-        // Definitive stale-nonce rejection: reconcile the on-chain postcondition
+      if (outcome.nonceStale || outcome.txExpired) {
+        // Definitive pre-inclusion rejection: reconcile the on-chain postcondition
         // first, then re-prepare a FRESH signed create_question (same spec).
         return this.reconcileOrRecreate(dedupKey, params, participants);
       }
@@ -917,9 +919,9 @@ export class Runner {
       this.store.saveQuestion(local, params.targetKey);
       return { questionId, alreadyExists: false, error: null };
     }
-    if (outcome.nonceStale) {
-      // Still stale: keep the freshly prepared bytes; the next tick reconciles.
-      return { questionId: null, alreadyExists: false, error: 'create_question nonce stale; will retry same intent' };
+    if (outcome.nonceStale || outcome.txExpired) {
+      // Still stale/expired: keep the freshly prepared bytes; the next tick reconciles.
+      return { questionId: null, alreadyExists: false, error: 'create_question nonce stale/expired; will retry same intent' };
     }
     if (outcome.status === 'failure') {
       this.store.markFailed(dedupKey, outcome.error ?? 'create_question failed');
