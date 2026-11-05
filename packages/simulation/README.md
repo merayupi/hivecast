@@ -37,23 +37,26 @@ and a labelled log-odds comparison (probabilities clipped to `[1e-9, 1-1e-9]`).
 
 ## Data bundle and provenance
 
-Committed under `data/` and verified by SHA-256 on load:
+Committed under `data/` and verified by SHA-256 + byte count on load:
 
-- `price.json` — Binance 1h klines (1608 candles), decimal strings throughout.
+- `price.json` — Binance Vision `NEARUSDT` 1h klines (1608 candles), decimal strings throughout.
 - `weather.json` — IFS daily precipitation (425 days) + 60 Single-Runs forecast inputs.
-- `manifest.json` — sources, model/instrument/grid, validity, fetch time, checksums,
+- `manifest.json` — sources, model/instrument/grid, validity, observed fetch time, checksums,
   attribution, licences, and per-input `availability` classification.
 
 Availability is disclosed honestly per input (see `manifest.json` and the report):
 
-- Binance candles — `proven` (completed candle is immutable; strategies only use
-  candles with `closeTime < cutoff`).
-- IFS precipitation Outcome — `proven` for the pinned model/grid at capture time
-  (grid model analysis, not a station observation).
-- Meteo forecast input — `inference`: a real Single-Runs IFS run initialised before
-  cutoff, but Open-Meteo does not record per-run publication time.
-- Climatology history input — `retrospective`: reanalysis of past days may be
-  revised; today's value is not proven to equal the value available at cutoff.
+- Binance candles — `retrospective`. The monthly archive is published after each month ends and
+  fetched post-evaluation, so no per-candle publication/availability timestamp is recorded. A
+  candle's period end is NOT publication evidence; the price experiment is a labelled
+  retrospective benchmark. Completed Binance kline values are immutable (no future-data leakage
+  into the close>open outcome), which is a weaker property than point-in-time availability.
+- IFS precipitation Outcome — `retrospective`: IFS analysis may be revised after the fact, so a
+  value fetched today is not proven to equal the value at resolution time (grid model, not a
+  station observation).
+- Meteo forecast input — `inference`: a real Single-Runs IFS run initialised before cutoff, but
+  Open-Meteo does not record per-run publication time.
+- Climatology history input — `retrospective`: reanalysis of past days may be revised.
 
 ## Regenerate the bundle
 
@@ -61,5 +64,7 @@ Availability is disclosed honestly per input (see `manifest.json` and the report
 npm run fetch-data --workspace @hivecast/simulation   # requires network
 ```
 
-Fetching records `available_at`/licence facts and recomputes checksums; the replay
-itself never fetches.
+Fetching downloads and SHA-256-verifies each Binance Vision monthly archive against its
+published `.CHECKSUM` file, validates completeness/contiguity/dates/units, and regenerates
+`manifest.json` with the observed fetch time and fresh checksums. The replay itself never
+fetches.

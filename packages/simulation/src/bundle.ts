@@ -65,6 +65,16 @@ export interface Manifest {
     note: string;
     [k: string]: unknown;
   }>;
+  sourceArchives?: Array<{
+    month: string;
+    url: string;
+    publishedSha256: string;
+    fetchedSha256: string;
+    bytes: number;
+    lastModified: string | null;
+    terms: string;
+    termsUrl: string;
+  }>;
   licensingSummary: string;
 }
 
@@ -72,16 +82,16 @@ function readJson<T>(file: string): T {
   return JSON.parse(readFileSync(path.join(DATA_DIR, file), 'utf8')) as T;
 }
 
-function sha256Of(file: string): string {
-  return createHash('sha256').update(readFileSync(path.join(DATA_DIR, file))).digest('hex');
-}
-
-/** Verify every manifest checksum; throws on mismatch. */
+/** Verify every manifest checksum and byte count; throws on mismatch. */
 export function verifyChecksums(manifest: Manifest): void {
   for (const [file, meta] of Object.entries(manifest.files)) {
-    const actual = sha256Of(file);
+    const buf = readFileSync(path.join(DATA_DIR, file));
+    const actual = createHash('sha256').update(buf).digest('hex');
     if (actual !== meta.sha256) {
       throw new Error(`checksum mismatch for ${file}: expected ${meta.sha256}, got ${actual}`);
+    }
+    if (buf.length !== meta.bytes) {
+      throw new Error(`byte-count mismatch for ${file}: expected ${meta.bytes}, got ${buf.length}`);
     }
   }
 }
@@ -99,14 +109,18 @@ export function loadBundle(): Bundle {
   const price = readJson<PriceBundle>('price.json');
   const weather = readJson<WeatherBundle>('weather.json');
 
-  if (price.candles.length !== 1608) {
-    throw new Error(`expected 1608 price candles, got ${price.candles.length}`);
+  if (price.candles.length !== manifest.evalPeriod.priceWarmup.candles + manifest.evalPeriod.priceRounds) {
+    throw new Error(
+      `expected ${manifest.evalPeriod.priceWarmup.candles + manifest.evalPeriod.priceRounds} price candles, got ${price.candles.length}`,
+    );
   }
-  if (weather.daily.time.length !== 425) {
-    throw new Error(`expected 425 weather days, got ${weather.daily.time.length}`);
+  if (weather.daily.time.length !== manifest.evalPeriod.weatherWarmup.days + manifest.evalPeriod.weatherRounds) {
+    throw new Error(
+      `expected ${manifest.evalPeriod.weatherWarmup.days + manifest.evalPeriod.weatherRounds} weather days, got ${weather.daily.time.length}`,
+    );
   }
-  if (Object.keys(weather.forecasts).length !== 60) {
-    throw new Error(`expected 60 weather forecasts, got ${Object.keys(weather.forecasts).length}`);
+  if (Object.keys(weather.forecasts).length !== manifest.evalPeriod.weatherRounds) {
+    throw new Error(`expected ${manifest.evalPeriod.weatherRounds} weather forecasts, got ${Object.keys(weather.forecasts).length}`);
   }
   return { manifest, price, weather };
 }
