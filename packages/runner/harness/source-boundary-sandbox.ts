@@ -654,15 +654,24 @@ async function main(): Promise<void> {
       // agent via the production runner (fetches strategy inputs from the
       // fixture's /v1/forecast + archive history). At least one commitment
       // avoids the contract's zero-commitments cancel path and exercises real
-      // resolution.
+      // resolution. A single tick after a large clock leap can prepare a tx
+      // whose blockHash reference expires before broadcast; retry bounded with
+      // fresh block timestamps (the production daemon ticks repeatedly).
       const openTimeNs = local.openTimeNs;
       await advanceTo(sb.rpcUrl, openTimeNs + 2n * NS_PER_BLOCK, blockTimeNs);
       chain.setNow(await currentBlockNs(sb.rpcUrl));
       const commitRunner = new Runner(config, chain, store);
-      const commitReport = await commitRunner.tick();
-      process.stdout.write(`source-boundary: ${mode} commit steps=${JSON.stringify(commitReport.steps)}\n`);
 
-      const commitsAfterOpen = await innerChain.listCommitments(questionId, 0, 64);
+      let commitsAfterOpen = await innerChain.listCommitments(questionId, 0, 64);
+      for (let attempt = 0; attempt < 6 && commitsAfterOpen.length < 1; attempt++) {
+        const landed = await advanceTo(sb.rpcUrl, openTimeNs + (2n + BigInt(attempt)) * NS_PER_BLOCK, blockTimeNs);
+        chain.setNow(landed);
+        const commitReport = await commitRunner.tick();
+        process.stdout.write(
+          `source-boundary: ${mode} commit attempt ${attempt} now=${landed} steps=${JSON.stringify(commitReport.steps)}\n`,
+        );
+        commitsAfterOpen = await innerChain.listCommitments(questionId, 0, 64);
+      }
       assert.ok(commitsAfterOpen.length >= 1, `expected >=1 commitment, got ${commitsAfterOpen.length}`);
 
       // Begin the RESOLUTION-stage source outage only AFTER the commit is
