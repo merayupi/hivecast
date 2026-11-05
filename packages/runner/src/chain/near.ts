@@ -113,12 +113,23 @@ export class NearChainClient implements ChainClient {
   }
 
   private async view<T>(method: string, args: Record<string, unknown>): Promise<T> {
-    const result = await this.provider.callFunction({
-      contractId: this.contractId,
-      method,
-      args,
-      blockQuery: { finality: 'final' },
-    });
+    let result: T | undefined;
+    try {
+      result = (await this.provider.callFunction({
+        contractId: this.contractId,
+        method,
+        args,
+        blockQuery: { finality: 'final' },
+      })) as T;
+    } catch (err) {
+      // Tag transport/view failures clearly so the daemon can report "RPC
+      // unavailable" instead of a misleading contract error. No fallback: the
+      // caller must retry or wait; state is never invented.
+      throw new Error(
+        `RPC view ${method} unavailable (${this.config.rpcUrl}): ${(err as Error).message}`,
+        { cause: err },
+      );
+    }
     return result as T;
   }
 

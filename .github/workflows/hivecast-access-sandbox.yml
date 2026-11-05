@@ -33,22 +33,26 @@ jobs:
         working-directory: contracts/hivecast
         run: RUSTFLAGS='-C link-arg=-s' cargo build --target wasm32-unknown-unknown --release
 
-      - name: Install near-sandbox binary (Linux x86)
+      - name: Install near-sandbox binary (Linux x86_64)
         run: |
           set -eux
-          mkdir -p "$HOME/.near"
+          mkdir -p "$HOME/.near/near-sandbox-2.14.0-rc.5" /tmp/hc-sandbox-extract
           curl -fsSL \
-            "https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.0.0/near-sandbox.tar.gz" \
-            -o near-sandbox.tar.gz
-          mkdir -p near-sandbox-extract
-          tar -xzf near-sandbox.tar.gz -C near-sandbox-extract
-          find near-sandbox-extract -type f -name 'near-sandbox*' -exec mv {} "$HOME/.near/near-sandbox-2.0.0" \; || true
-          chmod +x "$HOME/.near/near-sandbox-2.0.0"
-          "$HOME/.near/near-sandbox-2.0.0" --version || true
+            "https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/2.14.0-rc.5/near-sandbox.tar.gz" \
+            -o /tmp/hc-sandbox.tar.gz
+          tar -xzf /tmp/hc-sandbox.tar.gz -C /tmp/hc-sandbox-extract
+          BIN="$(find /tmp/hc-sandbox-extract -type f -name 'near-sandbox' | head -n1)"
+          test -n "$BIN"
+          mv "$BIN" "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox"
+          chmod +x "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox"
+          "$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox" --version || true
+          # Export the expanded absolute path for the next step (env.HOME is not
+          # set in GITHUB_ENV; shell $HOME is /home/runner).
+          echo "NEAR_SANDBOX_BIN_PATH=$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox" >> "$GITHUB_ENV"
 
       - name: Run real near-sandbox Forecast Access proof
         working-directory: packages/runner
         env:
-          HIVECAST_WASM: ../..//contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
-          NEAR_SANDBOX_BIN_PATH: ${{ env.HOME }}/.near/near-sandbox-2.0.0
+          HIVECAST_WASM: ${{ github.workspace }}/contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm
+          NEAR_SANDBOX_BIN_PATH: ${{ env.NEAR_SANDBOX_BIN_PATH }}
         run: npm run sandbox:access
