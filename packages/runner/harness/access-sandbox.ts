@@ -60,7 +60,7 @@ const REGISTRAR_ACCOUNT = 'registrar';
 const REGISTRAR_PRIVATE_KEY = 'ed25519:3tgdk2wPraJzT4nsTuf86UX41xgPNk3MHnq8epARMdBNs29AFEztAuaQ7iHddDfXG9F2RzV1XNQYgJyAyoW51UBB';
 const REGISTRAR_PUBLIC_KEY = 'ed25519:5BGSaf6YjVm7565VzWQHNxoyEjwr3jUpRJSGjREvU9dB';
 
-const NS_PER_BLOCK = 1_000_000_000n; // sandbox fast_forward advances ~1s per block
+const NS_PER_BLOCK = 1_000_000_000n; // nominal 1s; real per-block time is measured at runtime
 
 interface SandboxProc {
   rpcUrl: string;
@@ -240,11 +240,32 @@ async function currentBlockNs(rpcUrl: string): Promise<bigint> {
   return BigInt(ts);
 }
 
-async function advanceTo(rpcUrl: string, targetNs: bigint): Promise<void> {
-  const cur = await currentBlockNs(rpcUrl);
-  if (cur >= targetNs) return;
-  const blocks = Number((targetNs - cur) / NS_PER_BLOCK) + 2;
-  await sandboxFastForward(rpcUrl, blocks);
+/**
+ * Measure the actual wall-clock advance per `sandbox_fast_forward` block.
+ * neard's fast_forward block time is NOT guaranteed to be exactly 1s; we
+ * observe it once and use the measured value (never an assumption).
+ */
+async function measureBlockTimeNs(rpcUrl: string): Promise<bigint> {
+  const before = await currentBlockNs(rpcUrl);
+  await sandboxFastForward(rpcUrl, 10);
+  const after = await currentBlockNs(rpcUrl);
+  const perBlock = (after - before) / 10n;
+  return perBlock > 0n ? perBlock : NS_PER_BLOCK;
+}
+
+/**
+ * Advance to at least `targetNs` by fast-forwarding in a loop and re-reading
+ * the ACTUAL block timestamp each iteration. Uses the measured per-block time
+ * (ceil + 1 buffer) so it never overshoots into the next phase boundary.
+ */
+async function advanceTo(rpcUrl: string, targetNs: bigint, blockTimeNs: bigint): Promise<bigint> {
+  while (true) {
+    const cur = await currentBlockNs(rpcUrl);
+    if (cur >= targetNs) return cur;
+    const delta = targetNs - cur;
+    const blocks = Number((delta + blockTimeNs - 1n) / blockTimeNs) + 1;
+    await sandboxFastForward(rpcUrl, blocks);
+  }
 }
 
 interface EphemeralAccount {
@@ -356,12 +377,19 @@ async function main(): Promise<void> {
 
     await callFunction(contractAccount, contractId, 'new', { operator: operator.accountId });
 
+    // Measure the REAL per-block time once (fast_forward is not guaranteed to
+    // be exactly 1s) and use it for every subsequent time advance.
+    const blockTimeNs = await measureBlockTimeNs(sb.rpcUrl);
+
+    // Generous schedule anchored AFTER all account setup, so account-creation
+    // block production cannot consume the open/close window. The gaps are wide
+    // enough that a one-batch fast-forward overshoot cannot cross a boundary.
     const t0 = await currentBlockNs(sb.rpcUrl);
-    const openTime = t0 + 200n * NS_PER_BLOCK;
-    const closeTime = t0 + 600n * NS_PER_BLOCK;
-    const obsStart = t0 + 700n * NS_PER_BLOCK;
-    const obsEnd = t0 + 720n * NS_PER_BLOCK;
-    const resolveDeadline = t0 + 1000n * NS_PER_BLOCK;
+    const openTime = t0 + 300n * NS_PER_BLOCK;
+    const closeTime = t0 + 900n * NS_PER_BLOCK;
+    const obsStart = t0 + 1100n * NS_PER_BLOCK;
+    const obsEnd = t0 + 1400n * NS_PER_BLOCK;
+    const resolveDeadline = t0 + 2000n * NS_PER_BLOCK;
     const revealWindow = 600n * NS_PER_BLOCK;
     const accessPrice = nearToYocto('0.01');
     const minStake = nearToYocto('0.1');
@@ -385,7 +413,11 @@ async function main(): Promise<void> {
     })) as number;
     assert.ok(typeof questionId === 'number', `unexpected question_id: ${JSON.stringify(questionId)}`);
 
-    await advanceTo(sb.rpcUrl, openTime);
+    const openLanded = await advanceTo(sb.rpcUrl, openTime, blockTimeNs);
+    assert.ok(
+      openLanded >= openTime && openLanded < closeTime,
+      `clock landed outside commitment window: open=${openTime} close=${closeTime} landed=${openLanded}`,
+    );
     const salt = generateSalt();
     const hash = commitmentHash({
       contractId,
@@ -397,7 +429,11 @@ async function main(): Promise<void> {
     });
     await callFunction(agent.account, contractId, 'commit', { question_id: questionId, hash }, minStake);
 
-    await advanceTo(sb.rpcUrl, closeTime + 2n * NS_PER_BLOCK);
+    const saleLanded = await advanceTo(sb.rpcUrl, closeTime + 2n * NS_PER_BLOCK, blockTimeNs);
+    assert.ok(
+      saleLanded >= closeTime && saleLanded < obsStart,
+      `clock landed outside sale window: close=${closeTime} obsStart=${obsStart} landed=${saleLanded}`,
+    );
     await callFunction(operator.account, contractId, 'publish_snapshot', { question_id: questionId, snapshot_id: 'snapshot-1' });
     await callFunction(buyer.account, contractId, 'buy_forecast', { question_id: questionId }, accessPrice);
 
@@ -674,7 +710,7 @@ async function main(): Promise<void> {
     // balance increase. (Sandbox fast-forward only; never accelerated on
     // testnet.)
     // ------------------------------------------------------------------
-    await advanceTo(sb.rpcUrl, obsEnd + 2n * NS_PER_BLOCK);
+    await advanceTo(sb.rpcUrl, obsEnd + 2n * NS_PER_BLOCK, blockTimeNs);
     await callFunction(resolver.account, contractId, 'resolve', { question_id: questionId, outcome: true });
     const resolvedAtNs = await currentBlockNs(sb.rpcUrl);
 
@@ -686,7 +722,7 @@ async function main(): Promise<void> {
     assert.equal(commitment.revealed, 5000, 'on-chain reveal does not match the TS commitment probability');
     steps.push('ts-reveal-matches-onchain');
 
-    await advanceTo(sb.rpcUrl, resolvedAtNs + revealWindow + 2n * NS_PER_BLOCK);
+    await advanceTo(sb.rpcUrl, resolvedAtNs + revealWindow + 2n * NS_PER_BLOCK, blockTimeNs);
     const settleOutcome = await chain.settle(questionId, operator.accountId);
     assert.equal(settleOutcome.success, true, `settle failed: ${settleOutcome.error}`);
 
