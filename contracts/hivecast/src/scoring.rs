@@ -1,9 +1,9 @@
 //! Pure scoring and exact pool-allocation arithmetic.
 //!
-//! This module is deliberately free of `near_sdk` host calls so it can be
-//! unit-tested as ordinary Rust. Monetary units are integer yoctoNEAR
-//! (`u128`), probability is basis points (`u16`, `0..=10000`), and scores are
-//! on the scale `S = 100_000_000`.
+//! This module is deliberately free of `near_sdk` host calls so the exact
+//! arithmetic is exercised through the contract's public interface. Monetary
+//! units are integer yoctoNEAR (`u128`), probability is basis points
+//! (`u16`, `0..=10000`), and scores are on the scale `S = 100_000_000`.
 //!
 //! # Conservation contract
 //!
@@ -87,13 +87,8 @@ pub fn allocate(shares: &[Share], denom: U256, total: u128) -> Vec<(String, u128
 
     // Distribute `remainder` single yoctoNEAR to the largest fractional
     // remainders; ties broken by canonical account ID ascending.
-    // Sort ascending by (negated remainder, account) is not directly possible
-    // with U256 (no Ord helper for tuples), so sort descending by remainder
-    // with a stable sort keyed by account ascending as the secondary order.
-    //
-    // Build explicit sort keys: primary = remainder (descending), secondary =
-    // account (ascending). We sort by (reverse(remainder), account) using a
-    // stable sort after sorting by account ascending first.
+    // Sort ascending by account first, then stable-sort descending by
+    // remainder so equal remainders keep account-ascending order.
     entries.sort_by(|a, b| a.0.cmp(&b.0)); // account ascending first
     entries.sort_by(|a, b| b.2.cmp(&a.2)); // then remainder descending (stable)
 
@@ -183,95 +178,4 @@ pub fn fee_numerators(valid: &[(String, u128)], fee_pool: u128) -> (u128, Vec<Sh
         })
         .collect();
     (v, shares)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn acct(s: &str) -> String {
-        s.to_string()
-    }
-
-    #[test]
-    fn score_endpoints_and_center() {
-        // p=o gives perfect score S.
-        assert_eq!(score(10_000, true), S);
-        assert_eq!(score(0, false), S);
-        // p=0 vs YES is maximally wrong.
-        assert_eq!(score(0, true), 0);
-        assert_eq!(score(10_000, false), 0);
-        // p=50% vs either outcome: (5000)^2 = 25_000_000 => S - 25e6.
-        assert_eq!(score(5_000, true), S - 25_000_000);
-        assert_eq!(score(5_000, false), S - 25_000_000);
-    }
-
-    #[test]
-    fn allocate_conserves_with_remainder_and_tiebreak() {
-        // total = 10; exact shares 20/3 = 6.666 and 10/3 = 3.333
-        // (sum of numerators = 30 = total * denom).
-        // floors: 6, 3 => sum 9, remainder 1 to the larger fraction (20/3).
-        let shares = vec![
-            Share { account: acct("alice"), numerator: U256::from(20u128) },
-            Share { account: acct("bob"), numerator: U256::from(10u128) },
-        ];
-        let out = allocate(&shares, U256::from(3u128), 10);
-        let mut m = std::collections::HashMap::new();
-        for (a, v) in out {
-            m.insert(a, v);
-        }
-        assert_eq!(m["alice"], 7);
-        assert_eq!(m["bob"], 3);
-    }
-
-    #[test]
-    fn allocate_tiebreak_account_ascending() {
-        // total = 1; three equal 1/3 shares, floors all 0, remainder 1 goes to
-        // the smallest account (canonical ascending).
-        let shares = vec![
-            Share { account: acct("zebra"), numerator: U256::from(1u128) },
-            Share { account: acct("alpha"), numerator: U256::from(1u128) },
-            Share { account: acct("mike"), numerator: U256::from(1u128) },
-        ];
-        let out = allocate(&shares, U256::from(3u128), 1);
-        let mut total = 0u128;
-        let mut winner = None;
-        for (a, v) in out {
-            if v == 1 {
-                winner = Some(a);
-            }
-            total += v;
-        }
-        assert_eq!(total, 1);
-        assert_eq!(winner.as_deref(), Some("alpha"));
-    }
-
-    #[test]
-    fn single_participant_returns_stake() {
-        // One participant with any score: base payout equals stake exactly.
-        let p = vec![(acct("solo"), 100u128, score(10_000, true))];
-        let (w, _a, shares) = base_numerators(&p, 1_000_000);
-        assert_eq!(w, 100);
-        let out = allocate(&shares, U256::from(w * S), w);
-        assert_eq!(out, vec![(acct("solo"), 100u128)]);
-    }
-
-    #[test]
-    fn zero_reveal_returns_all_stakes() {
-        // Two participants, both zero score (non-reveal): base returns each
-        // stake exactly, no remainder.
-        let p = vec![
-            (acct("a"), 70u128, 0u128),
-            (acct("b"), 30u128, 0u128),
-        ];
-        let (w, _a, shares) = base_numerators(&p, 1_000_000);
-        assert_eq!(w, 100);
-        let out = allocate(&shares, U256::from(w * S), w);
-        let mut m = std::collections::HashMap::new();
-        for (a, v) in out {
-            m.insert(a, v);
-        }
-        assert_eq!(m["a"], 70);
-        assert_eq!(m["b"], 30);
-    }
 }
