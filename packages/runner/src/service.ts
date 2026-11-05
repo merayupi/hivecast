@@ -12,6 +12,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Runtime } from './runtime.js';
 import { AccessError, ACCESS_HTTP_STATUS } from './access/index.js';
+import { ChainUnavailableError } from './chain/index.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -156,6 +157,37 @@ export function createPublicService(runtime: Runtime): Server {
         return sendJson(res, 200, runtime.getAccessDisclosure(), runtime);
       }
 
+      if (req.method === 'GET' && url.pathname === '/agents') {
+        return sendJson(res, 200, { agents: runtime.getAgentRoster() }, runtime);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/simulation/report') {
+        return sendJson(res, 200, runtime.getSimulationReport(), runtime);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/analytics/leaderboard') {
+        const board = await runtime.getGlobalLeaderboard();
+        return sendJson(res, 200, board, runtime);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/analytics/economics') {
+        const economics = await runtime.getEconomics();
+        return sendJson(res, 200, economics, runtime);
+      }
+
+      // ---- Public finalized transaction receipt (read-only, keyless) -------
+
+      if (req.method === 'GET' && parts[0] === 'tx' && parts[1]) {
+        const txHash = parts[1];
+        const accountId = url.searchParams.get('account_id') ?? '';
+        if (!accountId) {
+          return sendJson(res, 400, { error: 'missing_account_id' }, runtime);
+        }
+        const view = await runtime.getTxFinalStatus(txHash, accountId);
+        if (!view) return sendJson(res, 404, { error: 'not_found' }, runtime);
+        return sendJson(res, 200, view, runtime);
+      }
+
       // ---- Forecast Access authentication ---------------------------------
 
       if (req.method === 'POST' && url.pathname === '/auth/challenge') {
@@ -253,6 +285,16 @@ export function createPublicService(runtime: Runtime): Server {
         return sendJson(res, 200, { question_id: questionId, entries: board }, runtime);
       }
 
+      if (req.method === 'GET' && parts[0] === 'questions' && parts[1] && parts[2] === 'comparison') {
+        const questionId = Number(parts[1]);
+        if (!Number.isInteger(questionId)) {
+          return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
+        }
+        const comparison = await runtime.getQuestionComparison(questionId);
+        if (!comparison) return sendJson(res, 404, { error: 'not_found' }, runtime);
+        return sendJson(res, 200, comparison, runtime);
+      }
+
       if (req.method === 'GET' && parts[0] === 'questions' && parts[1]) {
         const questionId = Number(parts[1]);
         if (!Number.isInteger(questionId)) {
@@ -267,6 +309,12 @@ export function createPublicService(runtime: Runtime): Server {
     } catch (err) {
       if (err instanceof AccessError) {
         return sendJson(res, ACCESS_HTTP_STATUS[err.code], { error: err.code, message: err.message }, runtime);
+      }
+      // Transient chain/RPC availability (e.g. the public RPC endpoint is down
+      // or rate-limited) must surface as 503, not a 500 "internal error", and
+      // never be conflated with a definitive "not found".
+      if (err instanceof ChainUnavailableError) {
+        return sendJson(res, 503, { error: 'chain_unavailable', message: (err as Error).message }, runtime);
       }
       return sendJson(res, 500, { error: 'internal_error', message: (err as Error).message }, runtime);
     }

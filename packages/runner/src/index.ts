@@ -20,7 +20,7 @@ export * from './schedule.js';
 
 // Chain client (RPC only; real sandbox = configurable RPC endpoint + WASM)
 export { NearChainClient } from './chain/index.js';
-export type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs } from './chain/types.js';
+export type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs, TxFinalStatusView } from './chain/types.js';
 
 // Persistence
 export { Store } from './store.js';
@@ -46,7 +46,29 @@ export type {
   LifecycleStatus,
   PublicConfig,
   LeaderboardEntry,
+  AgentRosterEntry,
 } from './runtime.js';
+
+// Public analytics / comparison / provenance (ticket #6)
+export {
+  listAllQuestions,
+  computeGlobalLeaderboard,
+  computeQuestionComparison,
+  computeSimulationReport,
+  computeAccountEconomics,
+  formatNearYocto,
+} from './public-data.js';
+export { PublicChainCache } from './public-cache.js';
+export type { PublicReadSource } from './public-cache.js';
+export type {
+  GlobalLeaderboard,
+  LeaderboardEntry as GlobalLeaderboardEntry,
+  QuestionComparison,
+  ComparisonParticipant,
+  AccountEconomics,
+  EconomicsReport,
+} from './public-data.js';
+export type { PublicJournalRow } from './store.js';
 
 // Forecast Access auth + delivery (ticket #5)
 export { AccessAuth, TRUST_DISCLOSURE, AccessError, ACCESS_HTTP_STATUS } from './access/index.js';

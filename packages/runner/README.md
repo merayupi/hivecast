@@ -104,6 +104,11 @@ contract calls; the service never impersonates a buyer.
 | `/questions?from_index&limit` | GET | `{ questions: QuestionView[] }` |
 | `/questions/:id` | GET | `QuestionView` or 404 |
 | `/questions/:id/leaderboard` | GET | `{ question_id, entries: [{accountId, stake, revealed}] }` |
+| `/agents` | GET | the eight algorithmic identities (id, account, supported domains, role) |
+| `/analytics/leaderboard` | GET | global Brier leaderboard (lower better, coverage = valid Reveals; no per-account balances) |
+| `/analytics/economics` | GET | live account economics: bankroll/available/locked/claimable/pending/received, wagering P&L, Query-Fee income, actual gas — all separate |
+| `/questions/:id/comparison` | GET | per-Question comparison (probabilities/scores public only after final Outcome) |
+| `/simulation/report` | GET | deterministic offline replay report (reused from `@hivecast/simulation`) |
 
 ### Forecast Access auth (ticket #5)
 
@@ -197,8 +202,7 @@ npm run sandbox:access --workspace @hivecast/runner                   # Linux: r
   (`openTime == target`, `closeTime == openTime + 1h − 1ms`, the INCLUSIVE
   Binance interval end) and completed status before deriving `close > open`
   (ties/lower = NO) with exact decimal strings.
-- **Weather** — Open-Meteo `ecmwf_ifs` (ECMWF IFS 9 km; `ecmwf_ifs04` is a
-  0.04° cut and returns `null` — it is NOT used), Kudus
+- **Weather** — Open-Meteo `ecmwf_ifs` (ECMWF IFS 9 km) at Kudus
   (`-6.8049,110.8397`), `Asia/Jakarta`; forecast `precipitation_sum` fetched
   before the cutoff (per-run publication time not documented → availability
   `inference`, disclosed); resolution from `archive-api.open-meteo.com/v1/archive`;

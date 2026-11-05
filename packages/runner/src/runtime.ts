@@ -13,7 +13,9 @@
  * remains in the operator CLI (cli.ts) and Runner.
  */
 
-import type { ChainClient } from './chain/types.js';
+import { AGENT_IDS, STRATEGY_DOMAINS } from '@hivecast/core';
+import type { AgentId } from '@hivecast/core';
+import type { ChainClient, TxFinalStatusView } from './chain/types.js';
 import type { RunnerConfig } from './config.js';
 import type { Runner, TickReport } from './runner.js';
 import type { Store } from './store.js';
@@ -22,6 +24,23 @@ import { AccessAuth, type AccessClock } from './access/index.js';
 import type { ForecastDeliveryDto, SessionDto, ChallengeDto } from './access/types.js';
 import type { VerifyChallengeInput } from './access/auth.js';
 import type { BalanceView, BuyerReceiptView, PendingWithdrawalView } from './types.js';
+import {
+  computeGlobalLeaderboard,
+  computeQuestionComparison,
+  computeSimulationReport,
+  computeAccountEconomics,
+} from './public-data.js';
+import { PublicChainCache } from './public-cache.js';
+import type { GlobalLeaderboard, QuestionComparison, EconomicsReport } from './public-data.js';
+import type { ReplayReport } from '@hivecast/simulation';
+
+/** Public Agent roster entry: identity, supported domains, and account. */
+export interface AgentRosterEntry {
+  agentId: AgentId;
+  accountId: string;
+  domains: readonly string[];
+  role: string;
+}
 
 /** Snapshot aggregate DTO — the product sold via Forecast Access. No secrets. */
 export interface SnapshotDto {
@@ -104,6 +123,8 @@ export class Runtime {
   readonly store: Store;
   readonly runner: Runner;
   readonly access: AccessAuth;
+  /** Bounded public read cache (terminal materialization + balance throttle). */
+  private publicReads: PublicChainCache;
 
   constructor(
     config: RunnerConfig,
@@ -117,6 +138,7 @@ export class Runtime {
     this.store = store;
     this.runner = runner;
     this.access = new AccessAuth(config, chain, store, options?.clock);
+    this.publicReads = new PublicChainCache(chain, store);
   }
 
   getPublicConfig(): PublicConfig {
@@ -153,6 +175,74 @@ export class Runtime {
       stake: c.stake,
       revealed: c.revealed,
     }));
+  }
+
+  /**
+   * The eight algorithmic identities with their supported domains and account
+   * ids. Account ids are on-chain public; no keys, salts, or forecasts.
+   */
+  getAgentRoster(): AgentRosterEntry[] {
+    return (AGENT_IDS as readonly AgentId[]).map((agentId) => ({
+      agentId,
+      accountId: this.config.agentAccounts[agentId] ?? '',
+      domains: STRATEGY_DOMAINS[agentId],
+      role:
+        agentId === 'meteo' || agentId === 'climatology'
+          ? 'weather'
+          : agentId === 'momentum' || agentId === 'meanrev'
+            ? 'price'
+            : 'both',
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Public analytics / comparison / provenance (ticket #6)
+  // -------------------------------------------------------------------------
+
+  /** Global Brier leaderboard over finalized public chain state. */
+  async getGlobalLeaderboard(): Promise<GlobalLeaderboard> {
+    return computeGlobalLeaderboard(this.publicReads, this.config.networkId, this.config.contractId);
+  }
+
+  /** Per-Question public comparison (scores only once the Outcome is final). */
+  async getQuestionComparison(questionId: number): Promise<QuestionComparison | null> {
+    return computeQuestionComparison(this.publicReads, questionId);
+  }
+
+  /** Deterministic offline simulation report (reused from @hivecast/simulation). */
+  getSimulationReport(): ReplayReport {
+    return computeSimulationReport();
+  }
+
+  /**
+   * Live account economics (bankroll/available/locked/claimable/pending/
+   * received, wagering P&L, Query-Fee income, actual gas) for the bounded
+   * Operator-controlled account set + any journal participants. Reuses the
+   * shared core `settle` accounting; gas comes from finalized journal hashes.
+   */
+  async getEconomics(): Promise<EconomicsReport> {
+    const accounts = new Set<string>([
+      this.config.operatorId,
+      this.config.resolverId,
+      ...Object.values(this.config.agentAccounts),
+    ]);
+    return computeAccountEconomics(
+      this.publicReads,
+      this.config.networkId,
+      this.config.contractId,
+      [...accounts],
+      this.store.listPublicJournal(),
+      this.config.operationalGasReserveYocto,
+    );
+  }
+
+  /**
+   * Finalized public transaction receipt projection (read-only, keyless):
+   * `final_execution_status`, whether the call produced a proven SuccessValue,
+   * and the yoctoNEAR `tokens_burnt` gas cost (null when not yet observable).
+   */
+  async getTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null> {
+    return this.chain.viewTxFinalStatus(txHash, accountId);
   }
 
   // -------------------------------------------------------------------------

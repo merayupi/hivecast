@@ -61,6 +61,21 @@ export interface AccessSessionRow {
   expiresAtMs: number;
 }
 
+/**
+ * A public-safe projection of one journal entry: transaction hash + kind +
+ * account + question + status only. Never exposes `payloadJson` (forecasts/
+ * salts/signed bytes), `dedupKey`, or `error` internals.
+ */
+export interface PublicJournalRow {
+  txHash: string | null;
+  kind: JournalKind;
+  accountId: string | null;
+  questionId: number | null;
+  status: JournalStatus;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export class Store {
   private db: DatabaseSync;
 
@@ -223,7 +238,140 @@ export class Store {
         phase TEXT NOT NULL,
         retired_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS public_terminal_rounds (
+        question_id INTEGER PRIMARY KEY,
+        phase TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        materialized_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS public_questions (
+        question_id INTEGER PRIMARY KEY,
+        phase TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        observed_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS public_tx_gas (
+        tx_hash TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        final_status TEXT NOT NULL,
+        success_value INTEGER NOT NULL,
+        tokens_burnt TEXT NOT NULL,
+        cached_at INTEGER NOT NULL
+      );
     `);
+  }
+
+  // -------------------------------------------------------------------------
+  // Public question view persistence (ALL discovered views, never dropped)
+  // -------------------------------------------------------------------------
+
+  savePublicQuestion(questionId: number, phase: string, dataJson: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO public_questions (question_id, phase, data_json, observed_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(questionId, phase, dataJson, Date.now());
+  }
+
+  getPublicQuestion(questionId: number): { phase: string; dataJson: string } | null {
+    const row = this.db
+      .prepare('SELECT phase, data_json FROM public_questions WHERE question_id = ?')
+      .get(questionId) as { phase: string; data_json: string } | undefined;
+    return row ? { phase: row.phase, dataJson: row.data_json } : null;
+  }
+
+  listPublicQuestions(): { questionId: number; phase: string; dataJson: string }[] {
+    const rows = this.db
+      .prepare('SELECT question_id, phase, data_json FROM public_questions ORDER BY question_id ASC')
+      .all() as { question_id: number; phase: string; data_json: string }[];
+    return rows.map((r) => ({ questionId: r.question_id, phase: r.phase, dataJson: r.data_json }));
+  }
+
+  /** The highest question_id fetched so far (persistent cursor). */
+  getPublicCursor(): number {
+    const raw = this.getMeta('public_fetch_cursor');
+    if (!raw) return 0;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+
+  setPublicCursor(n: number): void {
+    this.setMeta('public_fetch_cursor', String(n));
+  }
+
+  getPublicObservedCount(): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS c FROM public_questions')
+      .get() as { c: number };
+    return row.c;
+  }
+
+  // -------------------------------------------------------------------------
+  // Generic metadata (reuses the `meta` binding table)
+  // -------------------------------------------------------------------------
+
+  setMeta(key: string, value: string): void {
+    this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(key, value);
+  }
+
+  getMeta(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined;
+    return row ? row.value : null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Materialized terminal (settled/cancelled) rounds for the public read cache
+  // -------------------------------------------------------------------------
+
+  /** Persist an immutable terminal Round projection (question + commitments). */
+  savePublicTerminalRound(questionId: number, phase: 'settled' | 'cancelled', dataJson: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO public_terminal_rounds (question_id, phase, data_json, materialized_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(questionId, phase, dataJson, Date.now());
+  }
+
+  getPublicTerminalRound(questionId: number): { phase: string; dataJson: string } | null {
+    const row = this.db
+      .prepare('SELECT phase, data_json FROM public_terminal_rounds WHERE question_id = ?')
+      .get(questionId) as { phase: string; data_json: string } | undefined;
+    return row ? { phase: row.phase, dataJson: row.data_json } : null;
+  }
+
+  listPublicTerminalRounds(): { questionId: number; phase: string; dataJson: string }[] {
+    const rows = this.db
+      .prepare('SELECT question_id, phase, data_json FROM public_terminal_rounds ORDER BY question_id ASC')
+      .all() as { question_id: number; phase: string; data_json: string }[];
+    return rows.map((r) => ({ questionId: r.question_id, phase: r.phase, dataJson: r.data_json }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Finalized tx receipt gas cache (immutable once FINAL)
+  // -------------------------------------------------------------------------
+
+  savePublicTxGas(txHash: string, accountId: string, finalStatus: string, successValue: boolean, tokensBurnt: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO public_tx_gas (tx_hash, account_id, final_status, success_value, tokens_burnt, cached_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(txHash, accountId, finalStatus, successValue ? 1 : 0, tokensBurnt, Date.now());
+  }
+
+  getPublicTxGas(txHash: string): { accountId: string; finalStatus: string; successValue: boolean; tokensBurnt: string } | null {
+    const row = this.db
+      .prepare('SELECT account_id, final_status, success_value, tokens_burnt FROM public_tx_gas WHERE tx_hash = ?')
+      .get(txHash) as { account_id: string; final_status: string; success_value: number; tokens_burnt: string } | undefined;
+    if (!row) return null;
+    return { accountId: row.account_id, finalStatus: row.final_status, successValue: row.success_value === 1, tokensBurnt: row.tokens_burnt };
   }
 
   // -------------------------------------------------------------------------
@@ -585,6 +733,24 @@ export class Store {
       ? (this.db.prepare('SELECT * FROM journal WHERE kind = ? ORDER BY id ASC').all(kind) as Record<string, unknown>[])
       : (this.db.prepare('SELECT * FROM journal ORDER BY id ASC').all() as Record<string, unknown>[]);
     return rows.map((r) => this.rowToJournal(r));
+  }
+
+  /** Public-safe journal projection (no payload/salt/signed bytes/dedup key). */
+  listPublicJournal(): PublicJournalRow[] {
+    const rows = this.db
+      .prepare(
+        'SELECT tx_hash, kind, account_id, question_id, status, created_at, updated_at FROM journal ORDER BY id ASC',
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      txHash: r.tx_hash as string | null,
+      kind: r.kind as JournalKind,
+      accountId: r.account_id as string | null,
+      questionId: r.question_id === null ? null : Number(r.question_id),
+      status: r.status as JournalStatus,
+      createdAtMs: Number(r.created_at),
+      updatedAtMs: Number(r.updated_at),
+    }));
   }
 
   // -------------------------------------------------------------------------
