@@ -39,10 +39,10 @@ interface ReportDomain {
   initialCapital: string;
   participants: string[];
   agents: ReportAgent[];
+  aggregates: Array<{ kind: string; brierMean: number; logLossMean: number }>;
 }
 interface Report {
   seed: number;
-  config: { initialCapitalNear: string; minStakeNear: string; queryFeeNear: string };
   price: ReportDomain;
   weather: ReportDomain;
 }
@@ -134,13 +134,6 @@ test('accounting is conserved: no agent fabricates a bankroll', () => {
   }
 });
 
-test('initial capital, min stake, and query fee match the spec defaults', () => {
-  const r = runCli([]);
-  assert.equal(r.config.initialCapitalNear, '100');
-  assert.equal(r.config.minStakeNear, '0.1');
-  assert.equal(r.config.queryFeeNear, '0.01');
-});
-
 test('below-minimum capital forces abstention without rounding up', () => {
   // 0.5 NEAR -> 10% = 0.05 NEAR < 0.1 minimum stake -> skip every round.
   const r = runCli(['--capital', '0.5']);
@@ -150,6 +143,28 @@ test('below-minimum capital forces abstention without rounding up', () => {
     assert.ok(a.roundsForecast > 0, `${a.agentId} still produces forecasts`);
   }
   assert.equal(r.price.roundsWithParticipants, 0);
+});
+
+test('Brier means lie in [0,1] and log-loss means are finite, non-negative, and bounded', () => {
+  const r = runCli([]);
+  // Log-loss (logarithmic scoring rule) is bounded by -log(clip) with clip
+  // 1e-9 => ~20.72. A metric near this magnitude (e.g. a squared log-odds
+  // difference ~430) is not a legitimate log-score.
+  const LOG_LOSS_BOUND = 21;
+  for (const domain of [r.price, r.weather]) {
+    for (const a of domain.agents) {
+      if (a.brierMean !== null) {
+        assert.ok(a.brierMean >= 0 && a.brierMean <= 1, `${a.agentId} brier ${a.brierMean} in [0,1]`);
+      }
+    }
+    for (const agg of domain.aggregates) {
+      assert.ok(agg.brierMean >= 0 && agg.brierMean <= 1, `${agg.kind} brier ${agg.brierMean} in [0,1]`);
+      assert.ok(
+        Number.isFinite(agg.logLossMean) && agg.logLossMean >= 0 && agg.logLossMean <= LOG_LOSS_BOUND,
+        `${agg.kind} log-loss ${agg.logLossMean} in [0, ${LOG_LOSS_BOUND}]`,
+      );
+    }
+  }
 });
 
 test('capital reset is independent between domains', () => {

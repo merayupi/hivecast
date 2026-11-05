@@ -90,8 +90,8 @@ export interface AggregateSummary {
   kind: 'equal-weight' | 'stake-weighted';
   rounds: number;
   brierMean: number;
-  logOddsBrierMean: number;
-  logOddsClip: string;
+  logLossMean: number;
+  logLossClip: string;
 }
 
 export interface DomainResult {
@@ -211,8 +211,14 @@ function clampProbability(p: number): number {
   return Math.max(1e-9, Math.min(1 - 1e-9, p));
 }
 
-function logOdds(p: number): number {
-  return Math.log(clampProbability(p) / (1 - clampProbability(p)));
+/**
+ * Logarithmic scoring rule (log-loss): -log(p) for YES, -log(1-p) for NO.
+ * Range [0, +inf), lower is better. The optional labelled log-odds comparison
+ * (probability clipped to [1e-9, 1-1e-9] for 0%/100% endpoints).
+ */
+function logLoss(p: number, o: number): number {
+  const pc = clampProbability(p);
+  return o === 1 ? -Math.log(pc) : -Math.log(1 - pc);
 }
 
 function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig): DomainResult {
@@ -256,7 +262,7 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
   }
 
   // Aggregates per round.
-  const aggRounds: Array<{ eqBrier: number; swBrier: number; eqLo: number; swLo: number }> = [];
+  const aggRounds: Array<{ eqBrier: number; swBrier: number; eqLl: number; swLl: number }> = [];
   let roundsWithParticipants = 0;
   let peakLocked = 0n;
 
@@ -332,8 +338,8 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
       aggRounds.push({
         eqBrier: (eq - o) * (eq - o),
         swBrier: (sw - o) * (sw - o),
-        eqLo: (logOdds(eq) - logOdds(o)) ** 2,
-        swLo: (logOdds(sw) - logOdds(o)) ** 2,
+        eqLl: logLoss(eq, o),
+        swLl: logLoss(sw, o),
       });
     }
   }
@@ -354,11 +360,11 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
     const n = aggRounds.length;
     const eqMean = aggRounds.reduce((a, r) => a + r.eqBrier, 0) / n;
     const swMean = aggRounds.reduce((a, r) => a + r.swBrier, 0) / n;
-    const eqLoMean = aggRounds.reduce((a, r) => a + r.eqLo, 0) / n;
-    const swLoMean = aggRounds.reduce((a, r) => a + r.swLo, 0) / n;
+    const eqLlMean = aggRounds.reduce((a, r) => a + r.eqLl, 0) / n;
+    const swLlMean = aggRounds.reduce((a, r) => a + r.swLl, 0) / n;
     aggregates.push(
-      { domain, kind: 'equal-weight', rounds: n, brierMean: eqMean, logOddsBrierMean: eqLoMean, logOddsClip: '[1e-9, 1-1e-9]' },
-      { domain, kind: 'stake-weighted', rounds: n, brierMean: swMean, logOddsBrierMean: swLoMean, logOddsClip: '[1e-9, 1-1e-9]' },
+      { domain, kind: 'equal-weight', rounds: n, brierMean: eqMean, logLossMean: eqLlMean, logLossClip: '[1e-9, 1-1e-9]' },
+      { domain, kind: 'stake-weighted', rounds: n, brierMean: swMean, logLossMean: swLlMean, logLossClip: '[1e-9, 1-1e-9]' },
     );
   }
 

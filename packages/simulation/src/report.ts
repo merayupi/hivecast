@@ -60,7 +60,7 @@ function domainTable(header: string, d: DomainResult): string {
   lines.push('-'.repeat(111));
   for (const agg of d.aggregates) {
     lines.push(
-      `${agg.kind.padEnd(14)} brier=${agg.brierMean.toFixed(6)}  log-odds-brier=${agg.logOddsBrierMean.toFixed(6)} (clip ${agg.logOddsClip})`,
+      `${agg.kind.padEnd(14)} brier=${agg.brierMean.toFixed(6)}  log-loss=${agg.logLossMean.toFixed(6)} (clip ${agg.logLossClip})`,
     );
   }
   lines.push('');
@@ -80,7 +80,7 @@ export function renderTable(report: ReplayReport): string {
     lines.push(`- [${a.availability}] ${a.id}${a.availableAt ? ` (available_at: ${a.availableAt})` : ''}`);
   }
   lines.push('');
-  lines.push('log-odds comparison is a labelled simulation metric with probability clipped to [1e-9, 1-1e-9]; it is not the paid probability-space aggregate.');
+  lines.push('log-loss comparison is a labelled simulation metric (logarithmic scoring rule) with probability clipped to [1e-9, 1-1e-9]; lower is better, it is not the paid probability-space aggregate.');
   return lines.join('\n');
 }
 
