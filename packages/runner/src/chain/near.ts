@@ -437,24 +437,38 @@ export class NearChainClient implements ChainClient {
         }),
       );
     } catch (err) {
-      // Definitive, queryable "does not exist" answers → null (404).
-      if (err instanceof UnknownTransactionError || err instanceof InvalidTransactionError) {
+      // DEFINITIVE "does not exist" → null (404). Only UnknownTransactionError
+      // is that definitive signal; InvalidTransactionError (and everything else
+      // transport/RPC) is NOT "no such transaction" — it must NOT be silently
+      // mapped to a definitive unknown/not-found, or the replacement guard could
+      // re-sign a tx that is actually still in flight.
+      if (err instanceof UnknownTransactionError) {
         return null;
       }
-      // Transient RPC/chain availability → surface as unavailable (503), never
-      // conflated with "no such transaction".
+      // Transient RPC/chain availability or a non-definitive tx error → surface
+      // as unavailable (503), never conflated with "no such transaction".
       throw new ChainUnavailableError(
         `viewTxFinalStatus unavailable for ${txHash}: ${(err as Error).message}`,
       );
     }
 
+    // A malformed response (or one missing final_execution_status) is NOT a
+    // definitive "not found" — it is an unqueryable/transient condition and must
+    // preserve uncertainty (503), never return a definitive null.
     if (typeof res !== 'object' || res === null || !('final_execution_status' in res)) {
-      // Not yet queryable (no final_execution_status) → honest null.
-      return null;
+      throw new ChainUnavailableError(
+        `viewTxFinalStatus returned no final_execution_status for ${txHash}`,
+      );
     }
 
     const finalExecutionStatus =
       typeof res.final_execution_status === 'string' ? res.final_execution_status : '';
+    if (finalExecutionStatus === '') {
+      // Unparseable status → unavailable, not "unknown".
+      throw new ChainUnavailableError(
+        `viewTxFinalStatus returned an unparseable status for ${txHash}`,
+      );
+    }
 
     // Top-level `status` is the FINAL function-call result (SuccessValue or
     // Failure). Only a FINAL transaction with a proven SuccessValue is success.
