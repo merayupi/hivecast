@@ -1592,7 +1592,7 @@ mod tests {
         assert_eq!(c.get_balance("b.testnet".parse().unwrap()).claimable, "3");
         assert_eq!(c.get_balance("c.testnet".parse().unwrap()).claimable, "1");
 
-        let total: u128 = ["a", "b", "c"]
+        let total: u128 = ["a.testnet", "b.testnet", "c.testnet"]
             .iter()
             .map(|a| {
                 c.get_balance(a.parse().unwrap())
@@ -2228,5 +2228,240 @@ mod tests {
         let page = c
             .list_pending_withdrawals("alice.testnet".parse().unwrap(), 1000, 10);
         assert!(page.is_empty());
+    }
+
+    #[test]
+    fn both_outcomes_no_resolution_exact() {
+        // Same two-agent fixture resolved NO instead of YES. Alice stake 60
+        // forecast 100% YES (prob 10000), Bob stake 40 forecast 0% (prob 0).
+        // Outcome NO => Bob exact (s=S), Alice maximally wrong (s=0).
+        //   W=100, A=40*S=4e9, base_a=36, base_b=64.
+        //   fee 5 over V=100 => alice 3, bob 2.
+        //   claimables: alice 39, bob 66, sum 105.
+        let mut c = init();
+        testing_env!(ctx(OP, OP, 0, 0));
+        let qid = c.create_question(spec());
+
+        testing_env!(ctx("alice.testnet", "alice.testnet", 60, 1_500));
+        c.commit(qid, commit_hex(qid, "alice.testnet", 60, 10_000, "a"));
+        testing_env!(ctx("bob.testnet", "bob.testnet", 40, 1_500));
+        c.commit(qid, commit_hex(qid, "bob.testnet", 40, 0, "b"));
+
+        testing_env!(ctx(OP, OP, 0, 2_500));
+        c.publish_snapshot(qid, "snap".to_string());
+        testing_env!(ctx("buyer.testnet", "buyer.testnet", 5, 2_500));
+        c.buy_forecast(qid);
+
+        testing_env!(ctx(RESOLVER, RESOLVER, 0, 5_000));
+        c.resolve(qid, false);
+
+        testing_env!(ctx("alice.testnet", "alice.testnet", 0, 5_500));
+        c.reveal(qid, 10_000, "a".to_string());
+        testing_env!(ctx("bob.testnet", "bob.testnet", 0, 5_500));
+        c.reveal(qid, 0, "b".to_string());
+
+        testing_env!(ctx("anyone", "anyone", 0, 6_000));
+        c.settle(qid);
+
+        let q = c.get_question(qid).unwrap();
+        assert_eq!(q.outcome, Some(false));
+
+        assert_eq!(c.get_balance("alice.testnet".parse().unwrap()).claimable, "39");
+        assert_eq!(c.get_balance("bob.testnet".parse().unwrap()).claimable, "66");
+
+        let alice: u128 = c.get_balance("alice.testnet".parse().unwrap()).claimable.parse().unwrap();
+        let bob: u128 = c.get_balance("bob.testnet".parse().unwrap()).claimable.parse().unwrap();
+        assert_eq!(alice + bob, 105);
+    }
+
+    #[test]
+    fn overcap_stake_rejected_preserves_prior() {
+        // Max valid stake is accepted; an additional stake that would push the
+        // per-question total over MAX_TOTAL_STAKE is rejected before mutating
+        // state, and the prior commitment is preserved.
+        let mut c = init();
+        testing_env!(ctx(OP, OP, 0, 0));
+        let qid = c.create_question(spec());
+
+        // Generous sponsorship so the cap (not storage) is the binding limit.
+        testing_env!(ctx_bal(
+            "alice.testnet",
+            "alice.testnet",
+            MAX_TOTAL_STAKE,
+            MAX_TOTAL_STAKE * 2,
+            1_500
+        ));
+        c.commit(qid, commit_hex(qid, "alice.testnet", MAX_TOTAL_STAKE, 5_000, "a"));
+
+        // Bob's 1-yocto top-up would exceed the cap; rejected.
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            testing_env!(ctx_bal(
+                "bob.testnet",
+                "bob.testnet",
+                1,
+                MAX_TOTAL_STAKE * 2,
+                1_500
+            ));
+            c.commit(qid, commit_hex(qid, "bob.testnet", 1, 5_000, "b"));
+        }));
+        assert!(res.is_err(), "overcap stake must be rejected");
+
+        // Prior entitlement preserved.
+        testing_env!(ctx("anyone", "anyone", 0, 1_500));
+        let commitment = c
+            .get_commitment(qid, "alice.testnet".parse().unwrap())
+            .unwrap();
+        assert_eq!(commitment.stake, MAX_TOTAL_STAKE.to_string());
+    }
+
+    #[test]
+    fn commitment_binds_question_id() {
+        let mut c = init();
+        testing_env!(ctx(OP, OP, 0, 0));
+        let q0 = c.create_question(spec());
+        let q1 = c.create_question(spec());
+
+        // Alice commits to q0 with a hash bound to q0.
+        testing_env!(ctx("alice.testnet", "alice.testnet", 10, 1_500));
+        c.commit(q0, commit_hex(q0, "alice.testnet", 10, 5_000, "s"));
+
+        // She commits to q1 but reuses the q0-bound hash (wrong question).
+        testing_env!(ctx("alice.testnet", "alice.testnet", 10, 1_500));
+        c.commit(q1, commit_hex(q0, "alice.testnet", 10, 5_000, "s"));
+
+        testing_env!(ctx(OP, OP, 0, 2_500));
+        c.publish_snapshot(q1, "snap".to_string());
+
+        testing_env!(ctx(RESOLVER, RESOLVER, 0, 5_000));
+        c.resolve(q1, true);
+
+        // Reveal against q1 recomputes with q1, but the stored hash is bound
+        // to q0 -> rejected.
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            testing_env!(ctx("alice.testnet", "alice.testnet", 0, 5_500));
+            c.reveal(q1, 5_000, "s".to_string());
+        }));
+        assert!(res.is_err(), "question-bound commit must not reveal on another question");
+    }
+
+    #[test]
+    fn commitment_binds_contract_id() {
+        let mut c = init();
+        testing_env!(ctx(OP, OP, 0, 0));
+        let qid = c.create_question(spec());
+
+        // Commit a hash computed for a DIFFERENT contract id.
+        let other_hash = hex_encode(&commitment_hash(
+            "other-contract.testnet",
+            qid,
+            "alice.testnet",
+            10,
+            5_000,
+            b"s",
+        ));
+        testing_env!(ctx("alice.testnet", "alice.testnet", 10, 1_500));
+        c.commit(qid, other_hash);
+
+        testing_env!(ctx(OP, OP, 0, 2_500));
+        c.publish_snapshot(qid, "snap".to_string());
+
+        testing_env!(ctx(RESOLVER, RESOLVER, 0, 5_000));
+        c.resolve(qid, true);
+
+        // Reveal recomputes with the real contract id -> mismatch.
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            testing_env!(ctx("alice.testnet", "alice.testnet", 0, 5_500));
+            c.reveal(qid, 5_000, "s".to_string());
+        }));
+        assert!(res.is_err(), "contract-bound commit must not reveal on another contract");
+    }
+
+    #[test]
+    fn commitment_binds_stake() {
+        let mut c = init();
+        testing_env!(ctx(OP, OP, 0, 0));
+        let qid = c.create_question(spec());
+
+        // Commit a hash bound to stake 20 while attaching stake 10.
+        let wrong_stake_hash = hex_encode(&commitment_hash(
+            CONTRACT,
+            qid,
+            "alice.testnet",
+            20,
+            5_000,
+            b"s",
+        ));
+        testing_env!(ctx("alice.testnet", "alice.testnet", 10, 1_500));
+        c.commit(qid, wrong_stake_hash);
+
+        testing_env!(ctx(OP, OP, 0, 2_500));
+        c.publish_snapshot(qid, "snap".to_string());
+
+        testing_env!(ctx(RESOLVER, RESOLVER, 0, 5_000));
+        c.resolve(qid, true);
+
+        // Reveal recomputes with stored stake 10 -> mismatch (hash was for 20).
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            testing_env!(ctx("alice.testnet", "alice.testnet", 0, 5_500));
+            c.reveal(qid, 5_000, "s".to_string());
+        }));
+        assert!(res.is_err(), "stake-bound commit must not reveal with altered stake");
+    }
+
+    #[test]
+    fn settle_cannot_be_repeated() {
+        let (mut c, qid) = settled_two_agent();
+
+        // Second settle must be rejected (finalization is exactly once).
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            testing_env!(ctx("anyone", "anyone", 0, 6_000));
+            c.settle(qid);
+        }));
+        assert!(res.is_err(), "second settle must be rejected");
+
+        // Prior entitlements unchanged (no double credit).
+        testing_env!(ctx("anyone", "anyone", 0, 6_000));
+        assert_eq!(c.get_balance("alice.testnet".parse().unwrap()).claimable, "87");
+        assert_eq!(c.get_balance("bob.testnet".parse().unwrap()).claimable, "18");
+    }
+
+    #[test]
+    fn withdraw_callback_private_and_not_repeated() {
+        let (mut c, qid) = settled_two_agent();
+        let _ = qid;
+
+        // Alice withdraws 87.
+        testing_env!(ctx("alice.testnet", "alice.testnet", 0, 6_000));
+        c.withdraw(U128(87));
+
+        // Non-contract caller cannot invoke the private callback.
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            testing_env!(ctx("mallory.testnet", "mallory.testnet", 0, 6_000));
+            c.on_withdraw_callback(0);
+        }));
+        assert!(res.is_err(), "private callback must reject non-contract caller");
+
+        // Legitimate callback delivers once.
+        testing_env_with_promise_results(
+            ctx("hivecast.testnet", "hivecast.testnet", 0, 6_000),
+            PromiseResult::Successful(vec![]),
+        );
+        c.on_withdraw_callback(0);
+
+        // Repeating the callback for the same nonce is rejected.
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            testing_env_with_promise_results(
+                ctx("hivecast.testnet", "hivecast.testnet", 0, 6_000),
+                PromiseResult::Successful(vec![]),
+            );
+            c.on_withdraw_callback(0);
+        }));
+        assert!(res.is_err(), "callback must not finalize twice");
+
+        // Delivered exactly once: received stays 87, no double count.
+        testing_env!(ctx("alice.testnet", "alice.testnet", 0, 6_000));
+        let bal = c.get_balance("alice.testnet".parse().unwrap());
+        assert_eq!(bal.received, "87");
+        assert_eq!(bal.pending, "0");
     }
 }
