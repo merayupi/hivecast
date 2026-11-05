@@ -1,10 +1,9 @@
 //! Real near-sandbox integration tests for the HiveCast contract.
 //!
-//! These tests compile the actual contract WASM (`near_workspaces::compile_project`)
-//! and deploy it to a local `near-sandbox` node, then exercise the full public
-//! lifecycle through real transactions — not the near-sdk mock VM and not a
-//! mocked chain success. They also measure real settlement gas for a
-//! 64-participant Round.
+//! These tests deploy the already-built release WASM artifact to a local
+//! `near-sandbox` node, then exercise the full public lifecycle through real
+//! transactions — not the near-sdk mock VM and not a mocked chain success. They
+//! also measure real settlement gas for a 64-participant Round.
 //!
 //! Time handling: sandbox block timestamps advance with each transaction, so
 //! participant accounts are created *before* the commitment window, and all
@@ -82,7 +81,20 @@ async fn advance_to(worker: &Worker<Sandbox>, target_ns: u64) -> anyhow::Result<
 /// operator, resolver, and buyer subaccounts.
 async fn deploy() -> anyhow::Result<(Worker<Sandbox>, Contract, Account, Account, Account)> {
     let worker = near_workspaces::sandbox().await?;
-    let wasm = near_workspaces::compile_project(env!("CARGO_MANIFEST_DIR")).await?;
+    // Deploy the already-built release WASM artifact (built by the workflow's
+    // earlier `cargo build --target wasm32-unknown-unknown --release` step)
+    // rather than invoking `compile_project`, which re-runs cargo with the
+    // near-sdk ABI-generation feature and triggers unrelated JsonSchema errors.
+    let wasm_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/target/wasm32-unknown-unknown/release/hivecast.wasm"
+    );
+    let wasm = std::fs::read(wasm_path).unwrap_or_else(|e| {
+        panic!(
+            "deployable WASM missing at {wasm_path} ({e}); build it first with: \
+             RUSTFLAGS='-C link-arg=-s' cargo build --target wasm32-unknown-unknown --release"
+        )
+    });
     let contract = worker.dev_deploy(&wasm).await?;
 
     // Sponsor storage generously from the sandbox root account.
