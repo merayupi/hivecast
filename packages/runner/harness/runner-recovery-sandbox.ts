@@ -35,20 +35,13 @@ import { Account, JsonRpcProvider, KeyPair, actions, nearToYocto } from 'near-ap
 import type { AgentId, Candle } from '@hivecast/core';
 
 import { NearChainClient } from '../src/chain/near.js';
-import type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs, TxFinalStatusView } from '../src/chain/types.js';
+import type { CallOutcome } from '../src/chain/types.js';
 import type { RunnerConfig } from '../src/config.js';
 import { Runner } from '../src/runner.js';
 import type { SourceProvider, StrategyInputResult, ResolutionResult } from '../src/runner.js';
 import { Store } from '../src/store.js';
-import type {
-  BalanceView,
-  BuyerReceiptView,
-  CommitmentView,
-  ContractState,
-  LocalQuestion,
-  PendingWithdrawalView,
-  QuestionView,
-} from '../src/types.js';
+import { SandboxChainBase } from './sandbox-chain.js';
+import type { LocalQuestion } from '../src/types.js';
 
 const WASM_PATH = process.env.HIVECAST_WASM ?? 'contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm';
 const SANDBOX_BIN =
@@ -278,24 +271,11 @@ async function callFunction(
 // injection, delegating EVERY view/mutation to the real NearChainClient.
 // ---------------------------------------------------------------------------
 
-class SandboxRunnerChain implements ChainClient {
-  readonly contractId: string;
-  private readonly inner: NearChainClient;
-  private currentNs: bigint;
+class SandboxRunnerChain extends SandboxChainBase {
   private dropNextBroadcasts = 0;
   private staleNonceArmed = false;
   private externalOperatorSigner: Account | null = null;
   private externalOperatorId = '';
-
-  constructor(inner: NearChainClient, initialNs: bigint) {
-    this.inner = inner;
-    this.contractId = inner.contractId;
-    this.currentNs = initialNs;
-  }
-
-  setNow(ns: bigint): void {
-    this.currentNs = ns;
-  }
 
   dropBroadcastResponses(n: number): void {
     this.dropNextBroadcasts = n;
@@ -313,71 +293,7 @@ class SandboxRunnerChain implements ChainClient {
     this.staleNonceArmed = true;
   }
 
-  nowNs(): bigint {
-    return this.currentNs;
-  }
-
-  getContractState(): Promise<ContractState> {
-    return this.inner.getContractState();
-  }
-  getQuestion(questionId: number): Promise<QuestionView | null> {
-    return this.inner.getQuestion(questionId);
-  }
-  listQuestions(fromIndex: number, limit: number): Promise<QuestionView[]> {
-    return this.inner.listQuestions(fromIndex, limit);
-  }
-  getCommitment(questionId: number, accountId: string): Promise<CommitmentView | null> {
-    return this.inner.getCommitment(questionId, accountId);
-  }
-  listCommitments(questionId: number, fromIndex: number, limit: number): Promise<CommitmentView[]> {
-    return this.inner.listCommitments(questionId, fromIndex, limit);
-  }
-  getBalance(accountId: string): Promise<BalanceView> {
-    return this.inner.getBalance(accountId);
-  }
-  hasBought(questionId: number, accountId: string): Promise<boolean> {
-    return this.inner.hasBought(questionId, accountId);
-  }
-  getBuyerReceipt(questionId: number, accountId: string): Promise<BuyerReceiptView | null> {
-    return this.inner.getBuyerReceipt(questionId, accountId);
-  }
-  listBuyers(questionId: number, fromIndex: number, limit: number): Promise<BuyerReceiptView[]> {
-    return this.inner.listBuyers(questionId, fromIndex, limit);
-  }
-  getPendingWithdrawal(nonce: number): Promise<PendingWithdrawalView | null> {
-    return this.inner.getPendingWithdrawal(nonce);
-  }
-  listPendingWithdrawals(accountId: string, fromIndex: number, limit: number): Promise<PendingWithdrawalView[]> {
-    return this.inner.listPendingWithdrawals(accountId, fromIndex, limit);
-  }
-  viewAccountBalance(accountId: string): Promise<bigint> {
-    return this.inner.viewAccountBalance(accountId);
-  }
-  viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null> {
-    return this.inner.viewAccessKeyPermission(accountId, publicKey);
-  }
-  viewNativeBalance(accountId: string): Promise<bigint> {
-    return this.inner.viewNativeBalance(accountId);
-  }
-  viewNativeAvailable(accountId: string): Promise<bigint> {
-    return this.inner.viewNativeAvailable(accountId);
-  }
-  viewTxTokensBurnt(txHash: string, signer: string): Promise<string | null> {
-    return this.inner.viewTxTokensBurnt(txHash, signer);
-  }
-  viewTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null> {
-    return this.inner.viewTxFinalStatus(txHash, accountId);
-  }
-
-  prepareCall(methodName: string, args: Record<string, unknown>, signer: string, deposit: bigint, gas?: bigint): Promise<PreparedCall> {
-    return this.inner.prepareCall(methodName, args, signer, deposit, gas);
-  }
-
-  evictAccountNonceCache(accountId: string): void {
-    this.inner.evictAccountNonceCache(accountId);
-  }
-
-  async broadcastCall(signedBytesBase64: string): Promise<CallOutcome> {
+  override async broadcastCall(signedBytesBase64: string): Promise<CallOutcome> {
     // If armed, first consume the operator's current on-chain nonce via the
     // SEPARATE external signer (a real native Transfer), making the daemon's
     // cached nonce stale before its prepared tx is broadcast.
@@ -404,37 +320,6 @@ class SandboxRunnerChain implements ChainClient {
       };
     }
     return outcome;
-  }
-
-  createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome> {
-    return this.inner.createQuestion(spec, signer);
-  }
-  commit(questionId: number, hash: string, stakeYocto: bigint, signer: string): Promise<CallOutcome> {
-    return this.inner.commit(questionId, hash, stakeYocto, signer);
-  }
-  publishSnapshot(questionId: number, snapshotId: string, signer: string): Promise<CallOutcome> {
-    return this.inner.publishSnapshot(questionId, snapshotId, signer);
-  }
-  buyForecast(questionId: number, priceYocto: bigint, signer: string): Promise<CallOutcome> {
-    return this.inner.buyForecast(questionId, priceYocto, signer);
-  }
-  resolve(questionId: number, outcome: boolean, signer: string): Promise<CallOutcome> {
-    return this.inner.resolve(questionId, outcome, signer);
-  }
-  reveal(questionId: number, probBps: number, salt: string, signer: string): Promise<CallOutcome> {
-    return this.inner.reveal(questionId, probBps, salt, signer);
-  }
-  settle(questionId: number, signer: string): Promise<CallOutcome> {
-    return this.inner.settle(questionId, signer);
-  }
-  cancel(questionId: number, signer: string): Promise<CallOutcome> {
-    return this.inner.cancel(questionId, signer);
-  }
-  claimBuyerRefund(questionId: number, signer: string): Promise<CallOutcome> {
-    return this.inner.claimBuyerRefund(questionId, signer);
-  }
-  withdraw(amountYocto: bigint, signer: string): Promise<CallOutcome> {
-    return this.inner.withdraw(amountYocto, signer);
   }
 }
 

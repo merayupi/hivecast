@@ -124,6 +124,25 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** Parse a question id route segment; `null` when it is not an integer. */
+function parseQuestionId(raw: string | undefined): number | null {
+  const questionId = Number(raw);
+  return Number.isInteger(questionId) ? questionId : null;
+}
+
+interface Pagination {
+  fromIndex: number;
+  limit: number;
+}
+
+/** Shared pagination conversion for list routes (empty/missing → defaults). */
+function pagination(url: URL): Pagination {
+  return {
+    fromIndex: Number(url.searchParams.get('from_index') ?? '0'),
+    limit: Number(url.searchParams.get('limit') ?? '20'),
+  };
+}
+
 export function createPublicService(runtime: Runtime): Server {
   return createServer(async (req, res) => {
     try {
@@ -221,8 +240,8 @@ export function createPublicService(runtime: Runtime): Server {
       }
 
       if (req.method === 'GET' && parts[0] === 'forecast' && parts[1]) {
-        const questionId = Number(parts[1]);
-        if (!Number.isInteger(questionId)) {
+        const questionId = parseQuestionId(parts[1]);
+        if (questionId === null) {
           return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
         }
         const sessionId = readCookie(req, access.cookieName);
@@ -242,26 +261,24 @@ export function createPublicService(runtime: Runtime): Server {
       }
 
       if (req.method === 'GET' && parts[0] === 'account' && parts[1] && parts[2] === 'pending-withdrawals') {
-        const fromIndex = Number(url.searchParams.get('from_index') ?? '0');
-        const limit = Number(url.searchParams.get('limit') ?? '20');
+        const { fromIndex, limit } = pagination(url);
         const pending = await runtime.listPendingWithdrawals(parts[1], fromIndex, limit);
         return sendJson(res, 200, { account_id: parts[1], pending_withdrawals: pending }, runtime);
       }
 
       if (req.method === 'GET' && parts[0] === 'questions' && parts[1] && parts[2] === 'buyers') {
-        const questionId = Number(parts[1]);
-        if (!Number.isInteger(questionId)) {
+        const questionId = parseQuestionId(parts[1]);
+        if (questionId === null) {
           return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
         }
-        const fromIndex = Number(url.searchParams.get('from_index') ?? '0');
-        const limit = Number(url.searchParams.get('limit') ?? '20');
+        const { fromIndex, limit } = pagination(url);
         const buyers = await runtime.listBuyers(questionId, fromIndex, limit);
         return sendJson(res, 200, { question_id: questionId, buyers }, runtime);
       }
 
       if (req.method === 'GET' && parts[0] === 'questions' && parts[1] && parts[2] === 'receipt' && parts[3]) {
-        const questionId = Number(parts[1]);
-        if (!Number.isInteger(questionId)) {
+        const questionId = parseQuestionId(parts[1]);
+        if (questionId === null) {
           return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
         }
         const receipt = await runtime.getBuyerReceipt(questionId, parts[3]);
@@ -270,15 +287,14 @@ export function createPublicService(runtime: Runtime): Server {
       }
 
       if (req.method === 'GET' && url.pathname === '/questions') {
-        const fromIndex = Number(url.searchParams.get('from_index') ?? '0');
-        const limit = Number(url.searchParams.get('limit') ?? '20');
+        const { fromIndex, limit } = pagination(url);
         const questions = await runtime.listPublicQuestions(fromIndex, limit);
         return sendJson(res, 200, { questions }, runtime);
       }
 
       if (req.method === 'GET' && parts[0] === 'questions' && parts[1] && parts[2] === 'leaderboard') {
-        const questionId = Number(parts[1]);
-        if (!Number.isInteger(questionId)) {
+        const questionId = parseQuestionId(parts[1]);
+        if (questionId === null) {
           return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
         }
         const board = await runtime.listLeaderboard(questionId);
@@ -286,8 +302,8 @@ export function createPublicService(runtime: Runtime): Server {
       }
 
       if (req.method === 'GET' && parts[0] === 'questions' && parts[1] && parts[2] === 'comparison') {
-        const questionId = Number(parts[1]);
-        if (!Number.isInteger(questionId)) {
+        const questionId = parseQuestionId(parts[1]);
+        if (questionId === null) {
           return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
         }
         const comparison = await runtime.getQuestionComparison(questionId);
@@ -296,8 +312,8 @@ export function createPublicService(runtime: Runtime): Server {
       }
 
       if (req.method === 'GET' && parts[0] === 'questions' && parts[1]) {
-        const questionId = Number(parts[1]);
-        if (!Number.isInteger(questionId)) {
+        const questionId = parseQuestionId(parts[1]);
+        if (questionId === null) {
           return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
         }
         const q = await runtime.getPublicQuestion(questionId);

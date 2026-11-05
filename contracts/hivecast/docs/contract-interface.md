@@ -454,6 +454,20 @@ A single entrypoint (`scripts/ci-linux.sh`) and the GitHub Actions workflow
 (`.github/workflows/hivecast-contract.yml`, `workflow_dispatch`) run all three
 stages: WASM build, unit tests, and the sandbox lifecycle tests.
 
+> **Reviewed-head evidence (integration `77d3fb1`).** The native Linux matrix
+> (https://github.com/merayupi/hivecast/actions/runs/42062812357) at the exact
+> reviewed head passed: WASM build + all targets compile, **38 public-VM unit
+> tests** and **5 real-native Sandbox lifecycle tests** green. Latest 64-agent
+> settlement gas measured `18746839619924` gas (< 300 TGas). The three
+> added native edge cases cover paid zero-Reveal original Stake + buyer Query
+> Fee refund/native delivery/second-claim rejection; a named recipient deleted
+> after an asynchronous withdraw makes the real node return
+> `AccountDoesNotExist`, the private callback restores
+> claimable/pending `0`/received `0`, and the recreated account is safely
+> re-delivered; a non-contract caller is denied the private callback for a real
+> nonce. Production Rust/ABI/`near-sdk = 5.5.0` is unchanged by these test-only
+> cases. No fabricated `PromiseResult`/private-storage success.
+
 > **Windows note.** The WASM build works on Windows. The host test/sandbox
 > build does not: `near-sdk`'s `unit-testing` feature pulls `near-vm-runner`,
 > which compiles C (`blst`/`secp256k1`/`zstd`) and links `getrandom` via
