@@ -129,7 +129,13 @@ function deserializeCreateSpec(json: string): CreateQuestionSpec {
 
 /** Real source provider: completed candles / forecast runs / archive resolution. */
 export class LiveSourceProvider implements SourceProvider {
-  constructor(private config: RunnerConfig) {}
+  private config: RunnerConfig;
+  private nowProvider: () => bigint;
+
+  constructor(config: RunnerConfig, nowNs?: () => bigint) {
+    this.config = config;
+    this.nowProvider = nowNs ?? (() => BigInt(Date.now()) * 1_000_000n);
+  }
 
   private bases(): FetchBases {
     return {
@@ -189,7 +195,7 @@ export class LiveSourceProvider implements SourceProvider {
   }
 
   private nowNs(): bigint {
-    return BigInt(Date.now()) * 1_000_000n;
+    return this.nowProvider();
   }
 }
 
@@ -203,7 +209,7 @@ export class Runner {
     this.config = config;
     this.chain = chain;
     this.store = store;
-    this.source = source ?? new LiveSourceProvider(config);
+    this.source = source ?? new LiveSourceProvider(config, () => chain.nowNs());
   }
 
   private nowNs(): bigint {

@@ -386,7 +386,13 @@ export class NearChainClient implements ChainClient {
   async viewTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null> {
     let res: unknown;
     try {
-      res = await this.provider.viewTransactionStatus({ txHash, accountId });
+      res = await this.withReadTimeout(`viewTxFinalStatus(${txHash})`, () =>
+        this.provider.viewTransactionStatus({
+          txHash,
+          accountId,
+          waitUntil: 'NONE',
+        }),
+      );
     } catch (err) {
       // Definitive, queryable "does not exist" answers → null (404).
       if (err instanceof UnknownTransactionError || err instanceof InvalidTransactionError) {
