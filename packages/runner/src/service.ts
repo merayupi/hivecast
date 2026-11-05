@@ -156,6 +156,24 @@ export function createPublicService(runtime: Runtime): Server {
         return sendJson(res, 200, runtime.getAccessDisclosure(), runtime);
       }
 
+      if (req.method === 'GET' && url.pathname === '/agents') {
+        return sendJson(res, 200, { agents: runtime.getAgentRoster() }, runtime);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/simulation/report') {
+        return sendJson(res, 200, runtime.getSimulationReport(), runtime);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/analytics/leaderboard') {
+        const board = await runtime.getGlobalLeaderboard();
+        return sendJson(res, 200, board, runtime);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/analytics/economics') {
+        const economics = await runtime.getEconomics();
+        return sendJson(res, 200, economics, runtime);
+      }
+
       // ---- Forecast Access authentication ---------------------------------
 
       if (req.method === 'POST' && url.pathname === '/auth/challenge') {
@@ -251,6 +269,16 @@ export function createPublicService(runtime: Runtime): Server {
         }
         const board = await runtime.listLeaderboard(questionId);
         return sendJson(res, 200, { question_id: questionId, entries: board }, runtime);
+      }
+
+      if (req.method === 'GET' && parts[0] === 'questions' && parts[1] && parts[2] === 'comparison') {
+        const questionId = Number(parts[1]);
+        if (!Number.isInteger(questionId)) {
+          return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
+        }
+        const comparison = await runtime.getQuestionComparison(questionId);
+        if (!comparison) return sendJson(res, 404, { error: 'not_found' }, runtime);
+        return sendJson(res, 200, comparison, runtime);
       }
 
       if (req.method === 'GET' && parts[0] === 'questions' && parts[1]) {

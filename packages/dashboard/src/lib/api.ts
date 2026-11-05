@@ -1,0 +1,89 @@
+/**
+ * Typed client for the runner public HTTP service. Browser requests go through
+ * the Vite `/api` proxy (see vite.config.ts); cookies (the HttpOnly session)
+ * travel with `credentials: 'include'`.
+ */
+
+import type {
+  AgentRosterEntry,
+  ApiError,
+  BalanceView,
+  ChallengeDto,
+  EconomicsReport,
+  ForecastDeliveryDto,
+  GlobalLeaderboard,
+  PendingWithdrawalView,
+  PublicConfig,
+  QuestionComparison,
+  QuestionView,
+  ReplayReport,
+  SessionDto,
+  TrustDisclosure,
+} from './types';
+
+const BASE = import.meta.env.VITE_API_BASE ?? '/api';
+
+export class ApiClientError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'ApiClientError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      ...init,
+    });
+  } catch (err) {
+    throw new ApiClientError(0, 'network', `API unreachable: ${(err as Error).message}`);
+  }
+  if (res.status === 204) return undefined as T;
+  const body = (await res.json().catch(() => ({}))) as ApiError & Record<string, unknown>;
+  if (!res.ok) {
+    throw new ApiClientError(res.status, String(body.error ?? 'error'), body.message ?? String(body.error ?? res.status));
+  }
+  return body as unknown as T;
+}
+
+const get = <T>(path: string) => request<T>(path);
+const post = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: 'POST', body: JSON.stringify(body) });
+
+export const api = {
+  config: () => get<PublicConfig>('/config'),
+  disclosure: () => get<TrustDisclosure>('/disclosure'),
+  agents: async () => (await get<{ agents: AgentRosterEntry[] }>('/agents')).agents,
+  questions: (fromIndex = 0, limit = 50) => get<{ questions: QuestionView[] }>(`/questions?from_index=${fromIndex}&limit=${limit}`),
+  question: (id: number) => get<QuestionView>(`/questions/${id}`),
+  comparison: (id: number) => get<QuestionComparison>(`/questions/${id}/comparison`),
+  leaderboard: () => get<GlobalLeaderboard>('/analytics/leaderboard'),
+  economics: () => get<EconomicsReport>('/analytics/economics'),
+  simulation: () => get<ReplayReport>('/simulation/report'),
+  balance: (accountId: string) => get<BalanceView>(`/account/${accountId}/balance`),
+  pendingWithdrawals: async (accountId: string) =>
+    (await get<{ pending_withdrawals: PendingWithdrawalView[] }>(`/account/${accountId}/pending-withdrawals`)).pending_withdrawals,
+  receipt: async (questionId: number, accountId: string) => {
+    try {
+      return await get<{ question_id: number; account_id: string; price: string; refunded: boolean }>(
+        `/questions/${questionId}/receipt/${accountId}`,
+      );
+    } catch (err) {
+      if (err instanceof ApiClientError && err.status === 404) return null;
+      throw err;
+    }
+  },
+  challenge: (accountId: string) => post<ChallengeDto>('/auth/challenge', { account_id: accountId }),
+  verify: (input: { challenge_id: string; account_id: string; public_key: string; signature: string }) =>
+    post<SessionDto>('/auth/verify', input),
+  logout: () => post<void>('/auth/logout', {}),
+  forecast: (id: number) => get<ForecastDeliveryDto>(`/forecast/${id}`),
+};

@@ -270,6 +270,12 @@ export class NearChainClient implements ChainClient {
     return state.balance.available;
   }
 
+  /** Public keyless native balance: `amount` + `locked` (storage) — total balance. */
+  async viewNativeBalance(accountId: string): Promise<bigint> {
+    const state = await this.provider.viewAccount({ accountId, blockQuery: { finality: 'final' } });
+    return BigInt(state.amount) + BigInt(state.locked);
+  }
+
   async viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null> {
     try {
       const key = await this.provider.viewAccessKey({
@@ -291,6 +297,18 @@ export class NearChainClient implements ChainClient {
       throw new ChainUnavailableError(
         `viewAccessKeyPermission unavailable for ${accountId}: ${(err as Error).message}`,
       );
+    }
+  }
+
+  /** Actual gas cost (tokens_burnt) of a finalized transaction, or null. */
+  async viewTxTokensBurnt(txHash: string, signer: string): Promise<string | null> {
+    try {
+      const res = await this.provider.viewTransactionStatus({ txHash, accountId: signer });
+      const outcome = res.transaction_outcome?.outcome as { tokens_burnt?: string } | undefined;
+      if (outcome && typeof outcome.tokens_burnt === 'string') return outcome.tokens_burnt;
+      return null;
+    } catch {
+      return null; // not found / not finalized / unavailable — honest null
     }
   }
 

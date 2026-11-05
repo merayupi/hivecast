@@ -77,6 +77,10 @@ export interface ChainClient {
   listPendingWithdrawals(accountId: string, fromIndex: number, limit: number): Promise<PendingWithdrawalView[]>;
   /** Native NEAR balance of an account (yoctoNEAR). */
   viewAccountBalance(accountId: string): Promise<bigint>;
+
+  /** Public (keyless) native NEAR balance via `view_account` — no signing key
+   * required, suitable for read-only projections over arbitrary accounts. */
+  viewNativeBalance(accountId: string): Promise<bigint>;
   /**
    * Finalized permission of an account access key: `full-access` | `function-call`,
    * or `null` when the account or key definitively does not exist (fail-closed,
@@ -85,6 +89,14 @@ export interface ChainClient {
    * a silently-suppressed "no proof".
    */
   viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null>;
+
+  /**
+   * Actual gas cost of a finalized transaction, as `tokens_burnt` yoctoNEAR
+   * (decimal string), or `null` when the transaction is not found/finalized.
+   * This is the observed chain gas cost — distinct from wagering profit and
+   * Query-Fee income.
+   */
+  viewTxTokensBurnt(txHash: string, signer: string): Promise<string | null>;
 
   /**
    * Build + sign a contract call WITHOUT broadcasting. Persisting its bytes
