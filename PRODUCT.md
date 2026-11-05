@@ -50,8 +50,9 @@ No name beyond "HiveCast" and no visual identity are established. The wordmark a
 
 - Approved spec (issue #1), implementation plan, glossary, two ADRs, and source-research notes (Binance / Open-Meteo / NEAR constraints).
 - Real testnet contract `hivecast-market-6c4d.testnet`, operator/resolver `hivecast-1105-0548.testnet`, eight agent accounts `<id>.hivecast-1105-0548.testnet`, buyer `buyer.hivecast-1105-0548.testnet`.
-- Real runner HTTP service (health/config verified by parent at `127.0.0.1:8787`); a real Question `question_id=2` (11–12 UTC today) and `question_id=1` (closed, 6 participants, snapshot ready) exist on-chain.
-- No purchased-lifecycle or received-withdrawal proof yet; those are ticket #7 and must not be fabricated here.
+- Real runner HTTP service (health/config verified at `127.0.0.1:8787`); real Questions exist on-chain (q1 settled, q3 resolved, q4 settled, q5 closed).
+- **Paid lifecycle proof (observed, on-chain):** q4 paid with a guarded CLI buy (`7NU9…` before 13:00) and settled after the 13–14 UTC observation with Outcome YES, 6 Reveals, and all 6 Agent native balances increased (14:16:39); received W+F = `732563162558815544300000` yoctoNEAR exactly. q5 bought genuinely through the browser UI (`G5AYiL94KZjaeVjmkMDP3y5J68eGfjCvYYLDgVgLZzFW`, finalized before 14:00, `buy_forecast` qid 5, deposit 0.01 Ⓝ) with genuine NEP-413 login and repeat snapshot read (aggregate 49.91%, snapshot `095e06dae…7a8454`).
+- Buyer refund/withdrawal is **not yet proven** — it depends on a genuine Cancellation and is pending until exercised.
 
 ## Product Principles
 

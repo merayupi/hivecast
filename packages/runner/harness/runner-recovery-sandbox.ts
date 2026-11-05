@@ -702,31 +702,40 @@ async function main(): Promise<void> {
       process.stdout.write(`recovery: reveal tick steps=${JSON.stringify(revealReport.steps)}\n`);
     }
 
-    // 4c. Settle after the reveal deadline.
+    // 4c. Settle (permissionless) AFTER the reveal deadline — do it DIRECTLY
+    // via the chain so the Runner's auto-withdraw does NOT run in the same
+    // operation. Then read the EXACT public claimable baseline BEFORE the
+    // Runner's actual withdrawal (no duplicate accounting).
     const revealDeadline = resolvedQ!.reveal_deadline ? BigInt(resolvedQ!.reveal_deadline) : revealTarget + revealWindow;
-    await driveUntilPhase('settled', revealDeadline + 2n * NS_PER_BLOCK, 8);
+    const settleLanded = await advanceTo(sb.rpcUrl, revealDeadline + 2n * NS_PER_BLOCK, blockTimeNs);
+    chain.setNow(settleLanded);
+    const settleOutcome = await chain.settle(questionId, operator.accountId);
+    assert.equal(settleOutcome.success, true, `settle failed: ${settleOutcome.error}`);
     const settledQ = await innerChain.getQuestion(questionId);
     assert.equal(settledQ?.phase, 'settled', `expected settled: ${JSON.stringify(settledQ)}`);
 
-    // Record each agent's claimable before withdraw.
+    // EXACT public pre-withdraw entitlement baseline (claimable + native).
     const claimableBefore = new Map<string, string>();
+    const nativeBefore = new Map<string, bigint>();
     for (const id of PRICE_AGENTS) {
       const b = await innerChain.getBalance(agentAccts.get(id)!);
       claimableBefore.set(id, b.claimable);
+      nativeBefore.set(id, await innerChain.viewNativeBalance(agentAccts.get(id)!));
     }
+    const positiveClaimable = [...claimableBefore.values()].filter((c) => BigInt(c) > 0n);
+    assert.ok(positiveClaimable.length > 0, 'expected positive claimable entitlement before withdraw');
 
     // Withdraw with ONE transport response drop (the first agent's broadcast).
     chain.dropBroadcastResponses(1);
-    chain.setNow(await currentBlockNs(sb.rpcUrl));
-    await runner.tick();
+    chain.setNow(settleLanded);
+    await runner.tick(); // withdrawAllAgents drains the entitlement
 
     // Restart and tick again — must NOT re-withdraw or double-pay.
     runner = freshRunner();
-    chain.setNow(await currentBlockNs(sb.rpcUrl));
+    chain.setNow(settleLanded);
     await runner.tick();
 
     // Let the withdraw callbacks finalize (a few more blocks).
-    const settleLanded = await currentBlockNs(sb.rpcUrl);
     await advanceTo(sb.rpcUrl, settleLanded + 5n * NS_PER_BLOCK, blockTimeNs);
     chain.setNow(await currentBlockNs(sb.rpcUrl));
     await runner.tick();
@@ -737,6 +746,8 @@ async function main(): Promise<void> {
       assert.equal(b.claimable, '0', `${id} claimable not drained`);
       assert.equal(b.pending, '0', `${id} still pending`);
       assert.equal(b.received, claimed.toString(), `${id} received must equal exactly its claimable (no double payout)`);
+      const nativeAfter = await innerChain.viewNativeBalance(agentAccts.get(id)!);
+      assert.ok(nativeAfter > nativeBefore.get(id)!, `${id} native balance did not increase after withdraw`);
     }
     process.stdout.write('recovery: withdraw-reconcile OK (exact single payout, no double)\n');
 
