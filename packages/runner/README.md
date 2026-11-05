@@ -169,6 +169,40 @@ question_id cannot be reused across contracts. Tables:
 - `access_challenges` — one-use NEP-413 challenges (nonce, bound account/network/
   contract/domain, expiry, atomic consume).
 - `access_sessions` — authenticated buyer sessions (HttpOnly cookie value).
+- `signed_txs` — prepared signed transactions (canonical id + signed bytes)
+  persisted BEFORE broadcast for crash-safe rebroadcast.
+- `retired_rounds` — durable markers of a Round's observed terminal phase.
+- `public_questions` / `public_terminal_rounds` / `public_tx_gas` — materialized
+  public read cache (terminal rows and FINAL tx receipts are immutable).
+
+## Transaction resumption and the nonce/expiry guard
+
+Every financial mutation is a durable intent journaled BEFORE broadcast; the
+signed bytes (canonical `base58(sha256(unsigned tx))` id) are persisted before
+the network send, so a restart never re-signs a fresh nonce for a transaction
+that is still in flight.
+
+On restart/tick, `runOnce` reconciles in this order (no blind re-sign):
+
+1. **Business postcondition** — if the on-chain state already reflects the
+   intent, confirm and stop.
+2. **Old canonical receipt** — `viewTxFinalStatus(oldCanonicalHash, signer)`:
+   - `FINAL` + `success_value` → the original landed via a lost response →
+     confirm, never re-sign.
+   - `FINAL` + failure → definitive failure → safe to re-prepare fresh.
+   - non-`FINAL` (included/pending) → preserve the exact signed bytes and wait.
+   - definitively unknown (`UnknownTransactionError`) → rebroadcast the SAME
+     signed tx to learn the status.
+   - RPC unavailable / malformed status → preserve unknown, never re-sign.
+3. **Definitive pre-inclusion rejection** (`InvalidNonceError` → `nonceStale`,
+   `TransactionExpiredError` → `txExpired`): the tx was NOT included and can
+   never be accepted; evict the nonce cache and re-prepare a FRESH signed tx
+   (new nonce/blockHash) for the SAME intent, persisted before broadcast.
+4. **Network uncertainty** keeps the same signed tx and rebroadcasts it — never
+   a fresh sign on a mere timeout.
+
+`createQuestion` uses the same guard, recovering the on-chain spec match (by
+`targetKey` + full source/schedule spec) instead of double-creating.
 
 ## Config (`hivecast.config.example.json`)
 
@@ -193,6 +227,8 @@ npm run service --workspace @hivecast/runner                          # public H
 npm run harness:testnet --workspace @hivecast/runner -- price         # real-chain lifecycle
 npm run smoke:auth --workspace @hivecast/runner                       # real-testnet NEP-413 login (no purchase)
 npm run sandbox:access --workspace @hivecast/runner                   # Linux: real near-sandbox purchase + delivery proof
+npm run sandbox:recovery --workspace @hivecast/runner                # Linux: real near-sandbox restart/recovery proof (stale nonce + expired blockHash + lost response, single payout)
+npm run sandbox:source --workspace @hivecast/runner                  # Linux: real near-sandbox source-boundary proof (equal-close NO, threshold precipitation, missing-source wait/cancel)
 ```
 
 ## Exact source semantics (`src/source.ts`)
