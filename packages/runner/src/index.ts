@@ -20,7 +20,7 @@ export * from './schedule.js';
 
 // Chain client (RPC only; real sandbox = configurable RPC endpoint + WASM)
 export { NearChainClient } from './chain/index.js';
-export type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs } from './chain/types.js';
+export type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs, TxFinalStatusView } from './chain/types.js';
 
 // Persistence
 export { Store } from './store.js';
@@ -58,6 +58,8 @@ export {
   computeAccountEconomics,
   formatNearYocto,
 } from './public-data.js';
+export { PublicChainCache } from './public-cache.js';
+export type { PublicReadSource } from './public-cache.js';
 export type {
   GlobalLeaderboard,
   LeaderboardEntry as GlobalLeaderboardEntry,
