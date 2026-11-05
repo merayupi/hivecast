@@ -242,7 +242,11 @@ Private callback confirming the transfer. On success marks `delivered`
 ## View methods
 
 All view methods are read-only. `from_index`/`limit` are JSON numbers; `limit`
-is clamped to `1..=100` (or `1..=64` for commitments).
+is clamped to `1..=100` (or `1..=64` for commitments). Pagination is bounded:
+`list_questions`, `list_buyers`, and `list_pending_withdrawals` read exactly
+`O(limit)` storage entries via sequential numeric indexes (question ID / buyer
+insertion index / per-account withdrawal index) and never load or scan the
+full history.
 
 ### `get_contract_state`
 
@@ -351,6 +355,8 @@ args: { "question_id": number, "from_index": number, "limit": number }
 returns: BuyerReceipt[]
 ```
 
+Ordered by buyer insertion index (purchase order).
+
 ### `get_balance`
 
 ```
@@ -379,6 +385,8 @@ returns: { "nonce": number, "account_id": string, "amount": string, "status": "p
 args: { "account_id": string, "from_index": number, "limit": number }
 returns: PendingWithdrawal[]
 ```
+
+Ordered by per-account withdrawal insertion index (request order).
 
 ## Events
 

@@ -75,6 +75,7 @@ enum StorageKey {
     Balances,
     PendingWithdrawals,
     AccountWithdrawals,
+    AccountWithdrawalCount,
     NextNonce,
     TotalLiabilities,
 }
@@ -376,10 +377,15 @@ pub struct HiveCast {
     commitments: LookupMap<(u64, AccountId), Commitment>,
     question_participants: LookupMap<u64, Vec<AccountId>>,
     buyers: LookupMap<(u64, AccountId), BuyerReceipt>,
-    question_buyers: LookupMap<u64, Vec<AccountId>>,
+    /// Per-question buyer index: `(question_id, index) -> account_id`. Enables
+    /// O(limit) pagination reads without loading the whole buyer list.
+    question_buyers: LookupMap<(u64, u64), AccountId>,
     balances: LookupMap<AccountId, BalanceRecord>,
     pending_withdrawals: LookupMap<u64, PendingWithdrawal>,
-    account_withdrawals: LookupMap<AccountId, Vec<u64>>,
+    /// Per-account withdrawal index: `(account_id, index) -> nonce`.
+    account_withdrawals: LookupMap<(AccountId, u64), u64>,
+    /// Number of withdrawal records per account (the next append index).
+    account_withdrawal_count: LookupMap<AccountId, u32>,
     next_nonce: Lazy<u64>,
     /// Sum of all yoctoNEAR currently owed to users (active escrow stake/fee,
     /// claimable entitlements, and pending transfers not yet delivered).
@@ -403,6 +409,7 @@ impl HiveCast {
             balances: LookupMap::new(StorageKey::Balances),
             pending_withdrawals: LookupMap::new(StorageKey::PendingWithdrawals),
             account_withdrawals: LookupMap::new(StorageKey::AccountWithdrawals),
+            account_withdrawal_count: LookupMap::new(StorageKey::AccountWithdrawalCount),
             next_nonce: Lazy::new(StorageKey::NextNonce, 0u64),
             total_liabilities: Lazy::new(StorageKey::TotalLiabilities, 0u128),
         }
@@ -668,29 +675,29 @@ impl HiveCast {
             refunded: false,
         };
 
-        // Precise storage admission: buyer receipt + buyer-index growth. The
-        // attached fee is a NEW liability that must not subsidize its storage.
+        // O(1) append: the next buyer index is the current count. Two records:
+        // the buyer receipt and the per-question index entry. The attached fee
+        // is a NEW liability that must not subsidize its storage.
+        let buyer_index = q.buyer_count as u64;
         let key_bytes = borsh::to_vec(&(question_id, account.clone()))
             .expect("buyer key ser")
             .len() as u64;
         let value_bytes = borsh::to_vec(&receipt).expect("buyer value ser").len() as u64;
-        let mut additional = key_bytes + value_bytes + 2 * RECORD_OVERHEAD;
-
-        let old_buyers = self
-            .question_buyers
-            .get(&question_id)
-            .cloned()
-            .unwrap_or_default();
-        let old_idx_bytes = borsh::to_vec(&old_buyers).expect("idx ser").len() as u64;
-        let mut new_buyers = old_buyers;
-        new_buyers.push(account.clone());
-        let new_idx_bytes = borsh::to_vec(&new_buyers).expect("idx ser").len() as u64;
-        additional += new_idx_bytes.saturating_sub(old_idx_bytes);
+        let idx_key_bytes = borsh::to_vec(&(question_id, buyer_index))
+            .expect("buyer idx key ser")
+            .len() as u64;
+        let idx_val_bytes = borsh::to_vec(&account).expect("buyer idx val ser").len() as u64;
+        let additional = key_bytes
+            + value_bytes
+            + idx_key_bytes
+            + idx_val_bytes
+            + 4 * RECORD_OVERHEAD;
 
         self.ensure_storage_growth(additional, attached, &format!("buyer {question_id} {account}"));
 
         self.buyers.insert((question_id, account.clone()), receipt);
-        self.question_buyers.insert(question_id, new_buyers);
+        self.question_buyers
+            .insert((question_id, buyer_index), account.clone());
 
         self.add_liability(attached);
 
@@ -1013,28 +1020,30 @@ impl HiveCast {
             status: WithdrawalStatus::Pending,
         };
 
-        // Precise storage admission: pending-withdrawal record + the growth of
-        // the per-account withdrawal index. No new liability (the funds are
+        // O(1) append: the next withdrawal index is the current per-account
+        // count. Two records plus the count bump. No new liability (funds are
         // already in custody as claimable).
+        let wd_index = self
+            .account_withdrawal_count
+            .get(&account)
+            .copied()
+            .unwrap_or(0);
         let key_bytes = borsh::to_vec(&nonce).expect("wd key ser").len() as u64;
         let value_bytes = borsh::to_vec(&wd).expect("wd value ser").len() as u64;
-        let mut additional = key_bytes + value_bytes + 2 * RECORD_OVERHEAD;
-
-        let old_list = self
-            .account_withdrawals
-            .get(&account)
-            .cloned()
-            .unwrap_or_default();
-        let old_idx_bytes = borsh::to_vec(&old_list).expect("idx ser").len() as u64;
-        let mut new_list = old_list;
-        new_list.push(nonce);
-        let new_idx_bytes = borsh::to_vec(&new_list).expect("idx ser").len() as u64;
-        additional += new_idx_bytes.saturating_sub(old_idx_bytes);
+        let idx_key_bytes = borsh::to_vec(&(account.clone(), wd_index as u64))
+            .expect("wd idx key ser")
+            .len() as u64;
+        let idx_val_bytes = borsh::to_vec(&nonce).expect("wd idx val ser").len() as u64;
+        let additional =
+            key_bytes + value_bytes + idx_key_bytes + idx_val_bytes + 4 * RECORD_OVERHEAD;
 
         self.ensure_storage_growth(additional, 0, &format!("withdrawal {nonce}"));
 
         self.pending_withdrawals.insert(nonce, wd);
-        self.account_withdrawals.insert(account.clone(), new_list);
+        self.account_withdrawals
+            .insert((account.clone(), wd_index as u64), nonce);
+        self.account_withdrawal_count
+            .insert(account.clone(), wd_index + 1);
 
         emit(
             "withdrawal_requested",
@@ -1125,11 +1134,10 @@ impl HiveCast {
 
     pub fn list_questions(&self, from_index: u64, limit: u64) -> Vec<QuestionView> {
         let limit = limit.clamp(1, 100);
-        let mut keys: Vec<u64> = self.questions.iter().map(|(k, _)| *k).collect();
-        keys.sort_unstable();
-        keys.into_iter()
-            .skip(from_index as usize)
-            .take(limit as usize)
+        // Question IDs are sequential from 0; read O(limit) keys directly.
+        let total = *self.next_question_id.get();
+        let end = total.min(from_index.saturating_add(limit));
+        (from_index..end)
             .filter_map(|k| self.questions.get(&k).map(|q| self.question_view(k, q)))
             .collect()
     }
@@ -1195,20 +1203,25 @@ impl HiveCast {
         limit: u64,
     ) -> Vec<BuyerReceiptView> {
         let limit = limit.clamp(1, 100);
-        let buyers = self
-            .question_buyers
+        // Buyer count is bounded per question; read O(limit) index entries.
+        let buyer_count = self
+            .questions
             .get(&question_id)
-            .cloned()
-            .unwrap_or_default();
+            .map(|q| q.buyer_count as u64)
+            .unwrap_or(0);
+        let end = buyer_count.min(from_index.saturating_add(limit));
         let mut out = Vec::new();
-        for acct in buyers.into_iter().skip(from_index as usize).take(limit as usize) {
-            if let Some(r) = self.buyers.get(&(question_id, acct.clone())) {
-                out.push(BuyerReceiptView {
-                    question_id,
-                    account_id: acct,
-                    price: fmt_u128(r.price),
-                    refunded: r.refunded,
-                });
+        for idx in from_index..end {
+            if let Some(acct) = self.question_buyers.get(&(question_id, idx)) {
+                let account_id = acct.clone();
+                if let Some(r) = self.buyers.get(&(question_id, account_id.clone())) {
+                    out.push(BuyerReceiptView {
+                        question_id,
+                        account_id,
+                        price: fmt_u128(r.price),
+                        refunded: r.refunded,
+                    });
+                }
             }
         }
         out
@@ -1235,15 +1248,19 @@ impl HiveCast {
         limit: u64,
     ) -> Vec<PendingWithdrawalView> {
         let limit = limit.clamp(1, 100);
-        let nonces = self
-            .account_withdrawals
+        // Read O(limit) index entries via the per-account count.
+        let count = self
+            .account_withdrawal_count
             .get(&account_id)
-            .cloned()
-            .unwrap_or_default();
+            .copied()
+            .unwrap_or(0) as u64;
+        let end = count.min(from_index.saturating_add(limit));
         let mut out = Vec::new();
-        for nonce in nonces.into_iter().skip(from_index as usize).take(limit as usize) {
-            if let Some(w) = self.pending_withdrawals.get(&nonce) {
-                out.push(self.pending_view(w));
+        for idx in from_index..end {
+            if let Some(nonce) = self.account_withdrawals.get(&(account_id.clone(), idx)) {
+                if let Some(w) = self.pending_withdrawals.get(nonce) {
+                    out.push(self.pending_view(w));
+                }
             }
         }
         out
@@ -2027,5 +2044,61 @@ mod tests {
         // funds on storage.
         testing_env!(ctx_bal("bob.testnet", "bob.testnet", 1, 101, 1_500));
         c.commit(qid, commit_hex(qid, "bob.testnet", 1, 5_000, "b"));
+    }
+
+    #[test]
+    fn buyer_pagination_is_bounded_and_high_offset_works() {
+        let mut c = init();
+        testing_env!(ctx(OP, OP, 0, 0));
+        let qid = c.create_question(spec());
+
+        // One participant so snapshot is publishable and sale is open.
+        testing_env!(ctx("alice.testnet", "alice.testnet", 10, 1_500));
+        c.commit(qid, commit_hex(qid, "alice.testnet", 10, 5_000, "a"));
+
+        testing_env!(ctx(OP, OP, 0, 2_500));
+        c.publish_snapshot(qid, "snap".to_string());
+
+        // 6 buyers, access_price = 5.
+        for i in 0..6u32 {
+            let acct = format!("b{i}.testnet");
+            testing_env!(ctx(&acct, &acct, 5, 2_500));
+            c.buy_forecast(qid);
+        }
+
+        // Page [2,4) via the public interface.
+        testing_env!(ctx("anyone", "anyone", 0, 2_500));
+        let page = c.list_buyers(qid, 2, 2);
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].account_id.as_str(), "b2.testnet");
+        assert_eq!(page[1].account_id.as_str(), "b3.testnet");
+
+        // A high offset beyond the end returns an empty page (bounded read).
+        let page = c.list_buyers(qid, 1000, 10);
+        assert!(page.is_empty());
+    }
+
+    #[test]
+    fn withdrawal_pagination_is_bounded() {
+        let (mut c, qid) = settled_two_agent();
+        let _ = qid;
+
+        // Alice (87 claimable) issues three small withdrawals: nonces 0,1,2.
+        for _ in 0..3 {
+            testing_env!(ctx("alice.testnet", "alice.testnet", 0, 6_000));
+            c.withdraw(U128(10));
+        }
+
+        // Page the middle entry via the public interface.
+        testing_env!(ctx("alice.testnet", "alice.testnet", 0, 6_000));
+        let page = c
+            .list_pending_withdrawals("alice.testnet".parse().unwrap(), 1, 1);
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].nonce, 1);
+
+        // High offset returns empty (bounded read, no full-history load).
+        let page = c
+            .list_pending_withdrawals("alice.testnet".parse().unwrap(), 1000, 10);
+        assert!(page.is_empty());
     }
 }
