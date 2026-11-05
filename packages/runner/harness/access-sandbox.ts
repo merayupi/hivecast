@@ -68,21 +68,29 @@ interface SandboxProc {
   stop: () => void;
 }
 
-function freePort(): number {
+async function freePort(): Promise<number> {
   const srv = createNetServer();
-  srv.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
   const addr = srv.address();
   const port = typeof addr === 'object' && addr ? addr.port : 0;
-  srv.close();
+  await new Promise<void>((resolve) => srv.close(() => resolve()));
+  if (port === 0) throw new Error('failed to allocate a concrete spare port');
   return port;
 }
 
-async function waitForRpc(rpcUrl: string, timeoutMs = 60_000): Promise<void> {
+async function waitForRpc(rpcUrl: string, timeoutMs = 60_000, childExit?: () => number | null): Promise<void> {
   // neard exposes a plain HTTP `GET /status` endpoint; poll it exactly as
   // near-workspaces does (not a JSON-RPC POST `status`).
   const deadline = Date.now() + timeoutMs;
   let lastError = '';
   while (Date.now() < deadline) {
+    // Fail fast on a tracked child exit instead of waiting out the full window.
+    if (childExit) {
+      const code = childExit();
+      if (code !== null) {
+        throw new Error(`sandbox exited early with status ${code}`);
+      }
+    }
     try {
       const res = await fetch(`${rpcUrl}/status`, { method: 'GET' });
       if (res.ok) return;
@@ -124,8 +132,8 @@ function appendGenesisAccount(records: unknown[], accountId: string): void {
 async function startSandbox(): Promise<SandboxProc> {
   assert.ok(existsSync(SANDBOX_BIN), `near-sandbox binary not found at ${SANDBOX_BIN}`);
   const homeDir = mkdtempSync(path.join(tmpdir(), 'hc-sandbox-'));
-  const rpcPort = freePort();
-  const netPort = freePort();
+  const rpcPort = await freePort();
+  const netPort = await freePort();
   const rpcUrl = `http://127.0.0.1:${rpcPort}`;
 
   // init (--fast) — capture output so a failed init is diagnosable.
@@ -188,7 +196,7 @@ async function startSandbox(): Promise<SandboxProc> {
   });
 
   try {
-    await waitForRpc(rpcUrl);
+    await waitForRpc(rpcUrl, 60_000, () => exitCode);
   } catch (err) {
     // Surface every diagnostic before failing — no silent readiness failure.
     const reason = `\n--- sandbox stdout (tail) ---\n${stdoutBuf.slice(-4000)}\n` +
