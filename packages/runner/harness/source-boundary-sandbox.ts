@@ -159,7 +159,23 @@ async function startSandbox(): Promise<{ rpcUrl: string; stop: () => void }> {
   writeFileSync(configPath, JSON.stringify(config));
 
   const genesisPath = path.join(homeDir, 'genesis.json');
-  const genesis = JSON.parse(readFileSync(genesisPath, 'utf8')) as { total_supply: string; records: unknown[] };
+  const genesis = JSON.parse(readFileSync(genesisPath, 'utf8')) as {
+    total_supply: string;
+    records: unknown[];
+    epoch_length?: number;
+  };
+  // `--fast` init generates a TINY epoch_length. sandbox_fast_forward must stop
+  // `epoch_length - 3` blocks before each epoch boundary and produce the
+  // boundary blocks PHYSICALLY (see nearcore client_actor sandbox_process_fast_
+  // forward), so a multi-day leap across many short epochs forces thousands of
+  // real blocks (the observed ~166s/20k-chunk stall). Set a large epoch_length
+  // so a full 24h/48h jump stays within a handful of epochs.
+  const originalEpochLength = typeof genesis.epoch_length === 'number' ? genesis.epoch_length : null;
+  const newEpochLength = 1_000_000;
+  genesis.epoch_length = newEpochLength;
+  process.stdout.write(
+    `source-boundary: genesis epoch_length ${originalEpochLength ?? 'unset'} → ${newEpochLength}\n`,
+  );
   let totalSupply = BigInt(genesis.total_supply);
   for (const accountId of [SAND_ACCOUNT, CLONE_ACCOUNT, REGISTRAR_ACCOUNT]) {
     totalSupply += GENESIS_BALANCE;
