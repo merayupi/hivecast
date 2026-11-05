@@ -340,12 +340,16 @@ export class NearChainClient implements ChainClient {
 
   /** Public keyless native total balance (`amount` + validator `locked`). */
   async viewNativeBalance(accountId: string): Promise<bigint> {
-    return (await this.accountNativeState(accountId)).total;
+    return this.withReadTimeout(`viewNativeBalance(${accountId})`, () =>
+      this.accountNativeState(accountId),
+    ).then((s) => s.total);
   }
 
   /** Public keyless native spendable = total − max(validator locked, storage cost). */
   async viewNativeAvailable(accountId: string): Promise<bigint> {
-    return (await this.accountNativeState(accountId)).available;
+    return this.withReadTimeout(`viewNativeAvailable(${accountId})`, () =>
+      this.accountNativeState(accountId),
+    ).then((s) => s.available);
   }
 
   async viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null> {
