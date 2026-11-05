@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Account, JsonRpcProvider, SignedTransaction, actions, baseEncode, teraToGas } from 'near-api-js';
 import type { KeyPairString } from 'near-api-js';
-import { AccountDoesNotExistError, AccessKeyDoesNotExistError, UnknownTransactionError, InvalidTransactionError } from 'near-api-js/rpc-errors';
+import { AccountDoesNotExistError, AccessKeyDoesNotExistError, UnknownTransactionError, InvalidTransactionError, InvalidNonceError } from 'near-api-js/rpc-errors';
 import type { RunnerConfig } from '../config.js';
 import type {
   BalanceView,
@@ -145,6 +145,17 @@ export class NearChainClient implements ChainClient {
     return acc;
   }
 
+  /**
+   * Evict a cached Account so its `nonceManager` (which caches and increments
+   * the access-key nonce forever) re-fetches from chain. Used when the chain
+   * definitively rejects a prepared tx with InvalidNonceError (a concurrent
+   * signer/process consumed the cached nonce) — never on a mere timeout, and
+   * never re-signs an arbitrary uncertain tx.
+   */
+  evictAccountNonceCache(accountId: string): void {
+    this.accounts.delete(accountId);
+  }
+
   private async view<T>(method: string, args: Record<string, unknown>): Promise<T> {
     let result: T | undefined;
     try {
@@ -207,6 +218,21 @@ export class NearChainClient implements ChainClient {
       const outcome = await this.provider.sendTransactionUntil(signedTx, 'FINAL');
       return this.parseOutcome(outcome as unknown as Record<string, unknown>, canonicalHash);
     } catch (err) {
+      // DEFINITIVE validation rejection: the tx was not included because its
+      // nonce is stale (a concurrent signer/process consumed it). Distinguish
+      // this from network uncertainty so the runner can evict the nonce cache
+      // and re-prepare a FRESH signed tx for the SAME intent — never re-sign a
+      // mere timeout.
+      if (err instanceof InvalidNonceError) {
+        return {
+          txHash: canonicalHash,
+          success: false,
+          result: null,
+          error: (err as Error).message,
+          status: 'failure',
+          nonceStale: true,
+        };
+      }
       // Uncertain network error: inclusion status is unknown. Keep the
       // CANONICAL hash so the journal/receipt lookup stays correct while the
       // runner rebroadcasts the same signed transaction (never re-sign).

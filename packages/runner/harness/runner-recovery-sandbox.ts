@@ -358,6 +358,10 @@ class SandboxRunnerChain implements ChainClient {
     return this.inner.prepareCall(methodName, args, signer, deposit, gas);
   }
 
+  evictAccountNonceCache(accountId: string): void {
+    this.inner.evictAccountNonceCache(accountId);
+  }
+
   async broadcastCall(signedBytesBase64: string): Promise<CallOutcome> {
     // Broadcast for REAL (the node accepts the tx), then optionally drop the
     // RESPONSE to simulate a transport failure after acceptance. The prepared

@@ -32,6 +32,14 @@ export interface CallOutcome {
    * reconciliation).
    */
   status: 'success' | 'failure' | 'uncertain';
+  /**
+   * True when the chain DEFINITIVELY rejected this transaction with an
+   * InvalidNonceError (stale nonce — another signer/process consumed the
+   * cached nonce). The transaction was NOT included. The caller must evict the
+   * account's nonce cache and re-prepare a FRESH signed transaction for the
+   * SAME business intent (never re-sign an arbitrary timeout).
+   */
+  nonceStale?: boolean;
 }
 
 /** A prepared, signed-but-not-broadcast transaction. */
@@ -141,6 +149,13 @@ export interface ChainClient {
 
   /** Broadcast a previously prepared (signed) transaction. */
   broadcastCall(signedBytesBase64: string): Promise<CallOutcome>;
+
+  /**
+   * Evict the account's cached nonce manager so the next `prepareCall` re-fetches
+   * the access-key nonce from chain. Called only after a DEFINITIVE
+   * InvalidNonceError rejection (never a timeout/uncertain send).
+   */
+  evictAccountNonceCache(accountId: string): void;
 
   // Mutations (sign + send). `signer` is an account id.
   createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome>;
