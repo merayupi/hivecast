@@ -830,7 +830,8 @@ async fn test_withdraw_transfer_failure_restores_and_retry_delivers() -> anyhow:
 
     // Delete the participant (its leftover balance goes to the buyer). The
     // contract still holds the 15 NEAR entitlement keyed by the account id.
-    participant.delete_account(buyer.id()).await?;
+    let del = participant.delete_account(buyer.id()).await?;
+    assert!(del.is_success(), "delete_account failed: {del:?}");
 
     // Wait for the withdraw's final outcome (transfer + private callback).
     let outcome = wd_status.await?;
