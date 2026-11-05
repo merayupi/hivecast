@@ -39,7 +39,7 @@ interface ReportDomain {
   initialCapital: string;
   participants: string[];
   agents: ReportAgent[];
-  aggregates: Array<{ kind: string; brierMean: number; logLossMean: number }>;
+  aggregates: Array<{ kind: string; brierMean: number; logOddsBrierMean: number }>;
 }
 interface Report {
   seed: number;
@@ -145,12 +145,11 @@ test('below-minimum capital forces abstention without rounding up', () => {
   assert.equal(r.price.roundsWithParticipants, 0);
 });
 
-test('Brier means lie in [0,1] and log-loss means are finite, non-negative, and bounded', () => {
+test('Brier means and log-odds pooled Brier both lie in [0,1]', () => {
   const r = runCli([]);
-  // Log-loss (logarithmic scoring rule) is bounded by -log(clip) with clip
-  // 1e-9 => ~20.72. A metric near this magnitude (e.g. a squared log-odds
-  // difference ~430) is not a legitimate log-score.
-  const LOG_LOSS_BOUND = 21;
+  // Log-odds pooling maps clipped probabilities back to [0,1] via inverse
+  // logit, so its Brier score must also lie in [0,1]. A squared log-odds
+  // difference (~430) is not a valid aggregate Brier and would fail this.
   for (const domain of [r.price, r.weather]) {
     for (const a of domain.agents) {
       if (a.brierMean !== null) {
@@ -160,8 +159,8 @@ test('Brier means lie in [0,1] and log-loss means are finite, non-negative, and 
     for (const agg of domain.aggregates) {
       assert.ok(agg.brierMean >= 0 && agg.brierMean <= 1, `${agg.kind} brier ${agg.brierMean} in [0,1]`);
       assert.ok(
-        Number.isFinite(agg.logLossMean) && agg.logLossMean >= 0 && agg.logLossMean <= LOG_LOSS_BOUND,
-        `${agg.kind} log-loss ${agg.logLossMean} in [0, ${LOG_LOSS_BOUND}]`,
+        Number.isFinite(agg.logOddsBrierMean) && agg.logOddsBrierMean >= 0 && agg.logOddsBrierMean <= 1,
+        `${agg.kind} log-odds-brier ${agg.logOddsBrierMean} in [0,1]`,
       );
     }
   }
