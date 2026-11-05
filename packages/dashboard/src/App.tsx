@@ -7,6 +7,7 @@ import { ComparisonPanel, LeaderboardPanel, EconomicsPanel } from './components/
 import { SimulationPanel } from './components/Simulation';
 import { AgentsPanel, DisclosurePanel, AgentRoleNote } from './components/Disclosure';
 import { useWallet } from './lib/useWallet';
+import type { WalletState } from './lib/useWallet';
 import { usePolling } from './lib/hooks';
 import { api } from './lib/api';
 import type { QuestionView } from './lib/types';
@@ -44,6 +45,8 @@ export function App() {
           selected={selected}
           selectedId={selectedId}
           setSelectedId={setSelectedId}
+          walletState={state}
+          onLogin={() => void login()}
         />
       ) : mode === 'simulation' ? (
         <SimulationPanel />
@@ -78,14 +81,17 @@ function LiveView({
   selected,
   selectedId,
   setSelectedId,
+  walletState,
+  onLogin,
 }: {
   domain: 'all' | 'price' | 'weather';
   setDomain: (d: 'all' | 'price' | 'weather') => void;
   selected: QuestionView | null;
   selectedId: number | null;
   setSelectedId: (id: number | null) => void;
+  walletState: WalletState;
+  onLogin: () => void;
 }) {
-  const { state, login } = useWallet();
   return (
     <div className="live-view">
       <div className="live-list">
@@ -111,13 +117,13 @@ function LiveView({
       <div className="live-detail">
         {selected ? (
           <>
-            <QuestionDetail q={selected} wallet={state} />
-            {state.accountId && state.config ? (
+            <QuestionDetail q={selected} wallet={walletState} />
+            {walletState.accountId && walletState.config ? (
               <BalancePanel
-                accountId={state.accountId}
-                contractId={state.config.contractId}
-                networkId={state.config.networkId}
-                onAuthRequired={() => void login()}
+                accountId={walletState.accountId}
+                contractId={walletState.config.contractId}
+                networkId={walletState.config.networkId}
+                onAuthRequired={onLogin}
               />
             ) : null}
             {selected.phase === 'resolved' || selected.phase === 'settled' || selected.phase === 'cancelled' ? (
