@@ -73,6 +73,18 @@ function countdownLabel(q: QuestionView, nowMs: number): string {
     return q.reveal_deadline ? `reveal ${countdown(q.reveal_deadline, nowMs).label}` : 'resolved';
   }
   if (q.phase === 'open') return `cutoff ${countdown(q.close_time, nowMs).label}`;
-  if (q.phase === 'closed') return `obs ${countdown(q.observation_start, nowMs).label}`;
+  if (q.phase === 'closed') {
+    const nowNs = BigInt(nowMs) * 1_000_000n;
+    if (nowNs < BigInt(q.observation_start)) {
+      // Snapshot sale window: closes at observation start.
+      return `sale ${countdown(q.observation_start, nowMs).label}`;
+    }
+    if (nowNs < BigInt(q.observation_end)) {
+      // Observing: remaining until observation ends.
+      return `obs ends ${countdown(q.observation_end, nowMs).label}`;
+    }
+    // Observation ended, outcome pending: resolution deadline.
+    return `resolve ${countdown(q.resolve_deadline, nowMs).label}`;
+  }
   return q.phase;
 }
