@@ -40,7 +40,7 @@ import type { ChainClient, CallOutcome, PreparedCall, QuestionSpecArgs, TxFinalS
 import type { RunnerConfig } from '../src/config.js';
 import { Runner } from '../src/runner.js';
 import { Store } from '../src/store.js';
-import { wibDateOfUtcMs, msToNs, nsToMs, MS_PER_HOUR, MS_PER_DAY, MS_PER_MIN } from '../src/schedule.js';
+import { wibDateOfUtcMs, msToNs, nsToMs, MS_PER_HOUR, MS_PER_DAY, MS_PER_MIN, computeWeatherSchedule, computePriceSchedule, hourFloorUtc } from '../src/schedule.js';
 import type {
   BalanceView,
   BuyerReceiptView,
@@ -84,7 +84,10 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-async function waitForRpc(rpcUrl: string, timeoutMs = 60_000, childExit?: () => number | null): Promise<void> {
+async function waitForRpc(rpcUrl: string, timeoutMs = 90_000, childExit?: () => number | null): Promise<void> {
+  // neard exposes a plain HTTP `GET /status` endpoint AND a JSON-RPC `status`
+  // method. Require BOTH before proceeding, so a follow-up `fetch` POST cannot
+  // hit a half-started node and throw "fetch failed".
   const deadline = Date.now() + timeoutMs;
   let lastError = '';
   while (Date.now() < deadline) {
@@ -93,11 +96,26 @@ async function waitForRpc(rpcUrl: string, timeoutMs = 60_000, childExit?: () => 
       if (code !== null) throw new Error(`sandbox exited early with status ${code}`);
     }
     try {
-      const res = await fetch(`${rpcUrl}/status`, { method: 'GET' });
-      if (res.ok) return;
-      lastError = `HTTP ${res.status}`;
+      const status = await fetch(`${rpcUrl}/status`, { method: 'GET' });
+      if (status.ok) {
+        const rpc = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 'ready', method: 'status', params: [] }),
+        });
+        if (rpc.ok) {
+          const body = (await rpc.json()) as { result?: unknown };
+          if (body && 'result' in body) return;
+          lastError = 'JSON-RPC status returned no result';
+        } else {
+          lastError = `JSON-RPC status HTTP ${rpc.status}`;
+        }
+      } else {
+        lastError = `GET /status HTTP ${status.status}`;
+      }
     } catch (err) {
-      lastError = (err as Error).message;
+      const cause = err instanceof Error ? (err as { cause?: unknown }).cause : undefined;
+      lastError = `${(err as Error).message}${cause ? ` (cause: ${String(cause)})` : ''}`;
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -126,8 +144,10 @@ async function startSandbox(): Promise<{ rpcUrl: string; stop: () => void }> {
   const rpcPort = await freePort();
   const netPort = await freePort();
   const rpcUrl = `http://127.0.0.1:${rpcPort}`;
+  process.stdout.write(`source-boundary: sandbox init (rpc ${rpcPort}, net ${netPort})\n`);
 
   execFileSync(SANDBOX_BIN, ['--home', homeDir, 'init', '--fast'], { stdio: 'ignore' });
+  process.stdout.write('source-boundary: sandbox init done\n');
 
   const configPath = path.join(homeDir, 'config.json');
   const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
@@ -200,6 +220,20 @@ async function sandboxFastForward(rpcUrl: string, deltaHeight: number): Promise<
   if (!res.ok) throw new Error(`sandbox_fast_forward failed: ${res.status} ${await res.text()}`);
 }
 
+/** Fast-forward in BOUNDED chunks (never one giant multi-day leap that can
+ * exceed a single RPC deadline). Logs each chunk so a stall is observable. */
+async function sandboxFastForwardChunked(rpcUrl: string, totalBlocks: number, chunkSize = 20_000): Promise<void> {
+  let remaining = totalBlocks;
+  while (remaining > 0) {
+    const chunk = Math.min(chunkSize, remaining);
+    await sandboxFastForward(rpcUrl, chunk);
+    remaining -= chunk;
+    if (remaining > 0) {
+      process.stdout.write(`source-boundary: fast-forward ${chunk} blocks (${remaining} remaining)\n`);
+    }
+  }
+}
+
 async function currentBlockNs(rpcUrl: string): Promise<bigint> {
   const res = await fetch(rpcUrl, {
     method: 'POST',
@@ -226,7 +260,9 @@ async function advanceTo(rpcUrl: string, targetNs: bigint, blockTimeNs: bigint):
     if (cur >= targetNs) return cur;
     const delta = targetNs - cur;
     const blocks = Number((delta + blockTimeNs - 1n) / blockTimeNs) + 1;
-    await sandboxFastForward(rpcUrl, blocks);
+    // Bound the fast-forward into chunks so a large leap never exceeds a single
+    // RPC deadline; re-read the actual block timestamp after each chunk.
+    await sandboxFastForwardChunked(rpcUrl, blocks);
   }
 }
 
@@ -482,7 +518,6 @@ async function main(): Promise<void> {
     for (const [id, kp] of agentKeys) credentials[agentAccts.get(id)!] = kp.toString();
 
     const blockTimeNs = await measureBlockTimeNs(sb.rpcUrl);
-    const t0 = await currentBlockNs(sb.rpcUrl);
 
     function buildConfig(): RunnerConfig {
       return {
@@ -523,14 +558,23 @@ async function main(): Promise<void> {
     const accessPrice = nearToYocto('0.01');
 
     async function weatherScenario(mode: 'weather-below' | 'weather-equal' | 'weather-above' | 'missing-resolve', expect: 'no' | 'yes' | 'cancel'): Promise<void> {
-      const targetDateWibMs = nsToMs(t0) + 4 * MS_PER_DAY;
+      // Fresh anchor from the ACTUAL current block time (the chain advanced in
+      // every prior scenario). Target a WIB date at least 3 days ahead so the
+      // full opening (prev-day 18:00 WIB) is still in the future.
+      const curMs = nsToMs(await currentBlockNs(sb.rpcUrl));
+      // Next WIB midnight strictly after (cur + 3 days).
+      const wibMidnightMs = Date.parse(wibDateOfUtcMs(curMs + 3 * MS_PER_DAY) + 'T00:00:00+07:00');
+      const targetDateWibMs = wibMidnightMs;
       const date = wibDateOfUtcMs(targetDateWibMs);
+      // PRODUCTION weather schedule (opening prev-day 18:00 WIB, cutoff 23:55 WIB).
+      const schedule = computeWeatherSchedule(targetDateWibMs);
       fixture.setMode(mode);
       fixture.setDate(date);
+      process.stdout.write(`source-boundary: ${mode} target=${date} open=${schedule.openTimeNs}\n`);
 
       const config = buildConfig();
       const innerChain = new NearChainClient(config);
-      const chain = new SandboxClockChain(innerChain, t0);
+      const chain = new SandboxClockChain(innerChain, await currentBlockNs(sb.rpcUrl));
       const store = new Store(config.databasePath, config.networkId, config.contractId);
 
       const sourceJson = JSON.stringify({
@@ -548,13 +592,13 @@ async function main(): Promise<void> {
           event_definition: 'Open-Meteo ECMWF IFS 9km daily precipitation_sum >= 1.0 mm',
           source: sourceJson,
           resolver: resolver.accountId,
-          open_time: msToNs(targetDateWibMs - MS_PER_DAY + 18 * MS_PER_HOUR).toString(),
-          close_time: msToNs(targetDateWibMs - MS_PER_DAY + 23 * MS_PER_HOUR + 55 * MS_PER_MIN).toString(),
-          observation_start: msToNs(targetDateWibMs).toString(),
-          observation_end: msToNs(targetDateWibMs + MS_PER_DAY).toString(),
+          open_time: schedule.openTimeNs.toString(),
+          close_time: schedule.closeTimeNs.toString(),
+          observation_start: schedule.observationStartNs.toString(),
+          observation_end: schedule.observationEndNs.toString(),
           resolve_time: null,
-          resolve_deadline: msToNs(targetDateWibMs + MS_PER_DAY + 48 * MS_PER_HOUR).toString(),
-          reveal_window: msToNs(15 * MS_PER_MIN).toString(),
+          resolve_deadline: schedule.resolveDeadlineNs.toString(),
+          reveal_window: schedule.revealWindowNs.toString(),
           access_price: accessPrice.toString(),
           min_stake: minStake.toString(),
         },
@@ -569,13 +613,13 @@ async function main(): Promise<void> {
         sourceJson,
         sourceLabel: 'Open-Meteo ECMWF IFS 9km Kudus',
         resolver: resolver.accountId,
-        openTimeNs: msToNs(targetDateWibMs - MS_PER_DAY + 18 * MS_PER_HOUR),
-        closeTimeNs: msToNs(targetDateWibMs - MS_PER_DAY + 23 * MS_PER_HOUR + 55 * MS_PER_MIN),
-        observationStartNs: msToNs(targetDateWibMs),
-        observationEndNs: msToNs(targetDateWibMs + MS_PER_DAY),
-        resolveTimeNs: msToNs(targetDateWibMs + MS_PER_DAY),
-        resolveDeadlineNs: msToNs(targetDateWibMs + MS_PER_DAY + 48 * MS_PER_HOUR),
-        revealWindowNs: msToNs(15 * MS_PER_MIN),
+        openTimeNs: schedule.openTimeNs,
+        closeTimeNs: schedule.closeTimeNs,
+        observationStartNs: schedule.observationStartNs,
+        observationEndNs: schedule.observationEndNs,
+        resolveTimeNs: schedule.resolveTimeNs,
+        resolveDeadlineNs: schedule.resolveDeadlineNs,
+        revealWindowNs: schedule.revealWindowNs,
         accessPrice,
         minStake,
         participants: [
@@ -598,7 +642,7 @@ async function main(): Promise<void> {
       const commitsAfterOpen = await innerChain.listCommitments(questionId, 0, 64);
       assert.ok(commitsAfterOpen.length >= 1, `expected >=1 commitment, got ${commitsAfterOpen.length}`);
 
-      const obsEnd = msToNs(targetDateWibMs + MS_PER_DAY);
+      const obsEnd = local.observationEndNs;
       await advanceTo(sb.rpcUrl, obsEnd + 2n * NS_PER_BLOCK, blockTimeNs);
       chain.setNow(await currentBlockNs(sb.rpcUrl));
 
@@ -640,19 +684,22 @@ async function main(): Promise<void> {
     process.stdout.write('source-boundary: missing source → timeout-cancel (public phase)\n');
 
     // P1. Price equal close → NO. The production price fetcher reads its "now"
-    // from the injected chain clock (chain.nowNs()), so we anchor the target
-    // hour in the sandbox FUTURE, fast-forward through open→commit→observation
-    // end, and let resolveOutcome derive NO from an equal open/close candle.
+    // from the injected chain clock (chain.nowNs()), so we anchor a fresh FULL
+    // UTC hour in the sandbox FUTURE (via computePriceSchedule), fast-forward
+    // through open→commit→observation end, and let resolveOutcome derive NO
+    // from an equal open/close candle.
     {
-      const priceOpenMs = nsToMs(t0) + 2 * MS_PER_HOUR; // future hour relative to sandbox
-      const obsEndMs = priceOpenMs + MS_PER_HOUR;
-      const resolveDeadlineMs = priceOpenMs + MS_PER_HOUR + 15 * MS_PER_MIN;
+      const curMs = nsToMs(await currentBlockNs(sb.rpcUrl));
+      // A future full UTC hour (at least 2 hours ahead so open window is fresh).
+      const priceOpenMs = hourFloorUtc(curMs) + 2 * MS_PER_HOUR;
+      const schedule = computePriceSchedule(priceOpenMs);
       fixture.setMode('price-equal');
       fixture.setPriceOpenMs(priceOpenMs);
+      process.stdout.write(`source-boundary: price-equal openMs=${priceOpenMs} open=${schedule.openTimeNs}\n`);
 
       const config = buildConfig();
       const innerChain = new NearChainClient(config);
-      const chain = new SandboxClockChain(innerChain, t0);
+      const chain = new SandboxClockChain(innerChain, await currentBlockNs(sb.rpcUrl));
       const store = new Store(config.databasePath, config.networkId, config.contractId);
       const sourceJson = JSON.stringify({ kind: 'price', instrument: 'NEARUSDT', interval: '1h' });
 
@@ -662,13 +709,13 @@ async function main(): Promise<void> {
           event_definition: 'Binance spot NEARUSDT 1h candle: YES means close > open',
           source: sourceJson,
           resolver: resolver.accountId,
-          open_time: msToNs(priceOpenMs - 15 * MS_PER_MIN).toString(),
-          close_time: msToNs(priceOpenMs - 5 * MS_PER_MIN).toString(),
-          observation_start: msToNs(priceOpenMs).toString(),
-          observation_end: msToNs(obsEndMs).toString(),
+          open_time: schedule.openTimeNs.toString(),
+          close_time: schedule.closeTimeNs.toString(),
+          observation_start: schedule.observationStartNs.toString(),
+          observation_end: schedule.observationEndNs.toString(),
           resolve_time: null,
-          resolve_deadline: msToNs(resolveDeadlineMs).toString(),
-          reveal_window: msToNs(15 * MS_PER_MIN).toString(),
+          resolve_deadline: schedule.resolveDeadlineNs.toString(),
+          reveal_window: schedule.revealWindowNs.toString(),
           access_price: accessPrice.toString(),
           min_stake: minStake.toString(),
         },
@@ -683,13 +730,13 @@ async function main(): Promise<void> {
         sourceJson,
         sourceLabel: 'Binance NEARUSDT 1h',
         resolver: resolver.accountId,
-        openTimeNs: msToNs(priceOpenMs - 15 * MS_PER_MIN),
-        closeTimeNs: msToNs(priceOpenMs - 5 * MS_PER_MIN),
-        observationStartNs: msToNs(priceOpenMs),
-        observationEndNs: msToNs(obsEndMs),
-        resolveTimeNs: msToNs(obsEndMs),
-        resolveDeadlineNs: msToNs(resolveDeadlineMs),
-        revealWindowNs: msToNs(15 * MS_PER_MIN),
+        openTimeNs: schedule.openTimeNs,
+        closeTimeNs: schedule.closeTimeNs,
+        observationStartNs: schedule.observationStartNs,
+        observationEndNs: schedule.observationEndNs,
+        resolveTimeNs: schedule.resolveTimeNs,
+        resolveDeadlineNs: schedule.resolveDeadlineNs,
+        revealWindowNs: schedule.revealWindowNs,
         accessPrice,
         minStake,
         participants: [{ agentId: 'coinflip', accountId: agentAccts.get('coinflip')! }],
@@ -737,6 +784,13 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`source-boundary-sandbox failed: ${(err as Error).stack ?? err}\n`);
+  if (err instanceof Error) {
+    const cause = (err as { cause?: unknown }).cause;
+    process.stderr.write(
+      `source-boundary-sandbox failed: ${err.stack ?? err.message}${cause ? `\ncause: ${typeof cause === 'object' && cause !== null ? (cause as Error).stack ?? String(cause) : String(cause)}` : ''}\n`,
+    );
+  } else {
+    process.stderr.write(`source-boundary-sandbox failed (non-Error): ${String(err)}\n`);
+  }
   process.exit(1);
 });

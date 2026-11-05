@@ -778,12 +778,34 @@ async function main(): Promise<void> {
         resolveDeadlineNs: resolveDeadline + 1n,
         revealWindowNs: revealWindow,
       };
-      const created2 = await runner.createQuestion(q2Spec);
-      assert.ok(
-        typeof created2.questionId === 'number',
-        `stale-nonce create_question should recover to a question id, got ${JSON.stringify(created2)}`,
-      );
-      const q2Id = created2.questionId!;
+
+      // The daemon's FIRST prepared tx is definitively rejected with a stale
+      // nonce (the external signer consumed it). `createQuestion` correctly
+      // reports "will retry same intent" on that call; recovery happens on the
+      // NEXT attempt, which re-broadcasts the stale signed tx, then evicts the
+      // nonce cache and re-prepares a FRESH signed tx for the SAME spec. Drive
+      // the real recovery with a bounded loop (production daemon retries).
+      let q2Id: number | null = null;
+      for (let attempt = 0; attempt < 6 && q2Id === null; attempt++) {
+        const attemptResult = await runner.createQuestion(q2Spec);
+        process.stdout.write(
+          `recovery: stale-nonce createQuestion attempt ${attempt} = ${JSON.stringify(attemptResult)}\n`,
+        );
+        if (typeof attemptResult.questionId === 'number') {
+          q2Id = attemptResult.questionId;
+          break;
+        }
+        // Not yet recovered: advance a block + retry so the nonce cache is
+        // fresh and the chain blockHash has moved (no infinite rebroadcast of a
+        // stale signed tx).
+        const landed = await advanceTo(sb.rpcUrl, (await currentBlockNs(sb.rpcUrl)) + 2n * NS_PER_BLOCK, blockTimeNs);
+        chain.setNow(landed);
+        const report = await runner.tick();
+        process.stdout.write(
+          `recovery: stale-nonce reconcile tick ${attempt} = ${JSON.stringify(report.steps)}\n`,
+        );
+      }
+      assert.ok(q2Id !== null, 'stale-nonce create_question did not recover to a question id');
 
       // Exactly one on-chain question with the matching spec (no duplicate).
       const allQuestions = await innerChain.listQuestions(0, 100);
