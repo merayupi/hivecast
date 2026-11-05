@@ -40,6 +40,27 @@ export interface ReservationRow {
   amountYocto: bigint;
 }
 
+export interface AccessChallengeRow {
+  challengeId: string;
+  nonceHex: string;
+  accountId: string;
+  networkId: string;
+  contractId: string;
+  serviceDomain: string;
+  expiresAtMs: number;
+  consumedAtMs: number | null;
+  createdAtMs: number;
+}
+
+export interface AccessSessionRow {
+  sessionId: string;
+  accountId: string;
+  networkId: string;
+  contractId: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+}
+
 export class Store {
   private db: DatabaseSync;
 
@@ -165,6 +186,29 @@ export class Store {
         created_at INTEGER NOT NULL,
         PRIMARY KEY (question_id, stage, hash)
       );
+
+      CREATE TABLE IF NOT EXISTS access_challenges (
+        challenge_id TEXT PRIMARY KEY,
+        nonce_hex TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        network_id TEXT NOT NULL,
+        contract_id TEXT NOT NULL,
+        service_domain TEXT NOT NULL,
+        expires_at_ms INTEGER NOT NULL,
+        consumed_at_ms INTEGER,
+        created_at_ms INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS access_sessions (
+        session_id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        network_id TEXT NOT NULL,
+        contract_id TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        expires_at_ms INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_access_challenges_account ON access_challenges(account_id);
     `);
   }
 
@@ -484,6 +528,105 @@ export class Store {
       ? (this.db.prepare('SELECT * FROM journal WHERE kind = ? ORDER BY id ASC').all(kind) as Record<string, unknown>[])
       : (this.db.prepare('SELECT * FROM journal ORDER BY id ASC').all() as Record<string, unknown>[]);
     return rows.map((r) => this.rowToJournal(r));
+  }
+
+  // -------------------------------------------------------------------------
+  // Forecast Access challenges + sessions (ticket #5)
+  // -------------------------------------------------------------------------
+
+  saveAccessChallenge(c: {
+    challengeId: string;
+    nonceHex: string;
+    accountId: string;
+    networkId: string;
+    contractId: string;
+    serviceDomain: string;
+    expiresAtMs: number;
+    createdAtMs: number;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO access_challenges
+         (challenge_id, nonce_hex, account_id, network_id, contract_id, service_domain, expires_at_ms, consumed_at_ms, created_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      )
+      .run(c.challengeId, c.nonceHex, c.accountId, c.networkId, c.contractId, c.serviceDomain, c.expiresAtMs, c.createdAtMs);
+  }
+
+  getAccessChallenge(challengeId: string): AccessChallengeRow | null {
+    const row = this.db.prepare('SELECT * FROM access_challenges WHERE challenge_id = ?').get(challengeId) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) return null;
+    return {
+      challengeId: row.challenge_id as string,
+      nonceHex: row.nonce_hex as string,
+      accountId: row.account_id as string,
+      networkId: row.network_id as string,
+      contractId: row.contract_id as string,
+      serviceDomain: row.service_domain as string,
+      expiresAtMs: Number(row.expires_at_ms),
+      consumedAtMs: row.consumed_at_ms === null ? null : Number(row.consumed_at_ms),
+      createdAtMs: Number(row.created_at_ms),
+    };
+  }
+
+  /**
+   * Atomically consume a challenge (single-use). Returns true only when this
+   * call performed the one permitted consumption; a concurrent or replayed
+   * consume returns false. Expiry is part of the conditional, so an expired
+   * challenge can never be consumed.
+   */
+  consumeAccessChallenge(challengeId: string, nowMs: number): boolean {
+    const res = this.db
+      .prepare(
+        `UPDATE access_challenges SET consumed_at_ms = ?
+         WHERE challenge_id = ? AND consumed_at_ms IS NULL AND expires_at_ms > ?`,
+      )
+      .run(nowMs, challengeId, nowMs);
+    return res.changes === 1;
+  }
+
+  saveAccessSession(s: {
+    sessionId: string;
+    accountId: string;
+    networkId: string;
+    contractId: string;
+    createdAtMs: number;
+    expiresAtMs: number;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO access_sessions (session_id, account_id, network_id, contract_id, created_at_ms, expires_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(s.sessionId, s.accountId, s.networkId, s.contractId, s.createdAtMs, s.expiresAtMs);
+  }
+
+  getAccessSession(sessionId: string): AccessSessionRow | null {
+    const row = this.db.prepare('SELECT * FROM access_sessions WHERE session_id = ?').get(sessionId) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) return null;
+    return {
+      sessionId: row.session_id as string,
+      accountId: row.account_id as string,
+      networkId: row.network_id as string,
+      contractId: row.contract_id as string,
+      createdAtMs: Number(row.created_at_ms),
+      expiresAtMs: Number(row.expires_at_ms),
+    };
+  }
+
+  revokeAccessSession(sessionId: string): void {
+    this.db.prepare('DELETE FROM access_sessions WHERE session_id = ?').run(sessionId);
+  }
+
+  pruneExpiredAccess(nowMs: number): void {
+    this.db.prepare('DELETE FROM access_sessions WHERE expires_at_ms <= ?').run(nowMs);
+    this.db
+      .prepare('DELETE FROM access_challenges WHERE expires_at_ms <= ? OR consumed_at_ms IS NOT NULL')
+      .run(nowMs);
   }
 
   private rowToJournal(row: Record<string, unknown>): JournalRow {

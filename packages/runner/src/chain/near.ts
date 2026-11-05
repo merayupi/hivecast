@@ -221,6 +221,21 @@ export class NearChainClient implements ChainClient {
     return state.balance.available;
   }
 
+  async viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null> {
+    try {
+      const key = await this.provider.viewAccessKey({
+        accountId,
+        publicKey,
+        finalityQuery: { finality: 'final' },
+      });
+      if (key.permission === 'FullAccess') return 'full-access';
+      return 'function-call';
+    } catch {
+      // Key or account not found (or RPC unavailable): fail closed, no ownership proof.
+      return null;
+    }
+  }
+
   createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome> {
     // Actual wire shape: create_question(&mut self, spec: QuestionSpec).
     return this.call('create_question', { spec }, signer, 0n);

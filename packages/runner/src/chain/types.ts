@@ -62,6 +62,12 @@ export interface ChainClient {
   listPendingWithdrawals(accountId: string, fromIndex: number, limit: number): Promise<PendingWithdrawalView[]>;
   /** Native NEAR balance of an account (yoctoNEAR). */
   viewAccountBalance(accountId: string): Promise<bigint>;
+  /**
+   * Finalized permission of an account access key: `full-access` | `function-call`,
+   * or `null` when the key/account does not exist (fail-closed). Used by Forecast
+   * Access ownership verification; never optimistic.
+   */
+  viewAccessKeyPermission(accountId: string, publicKey: string): Promise<'full-access' | 'function-call' | null>;
 
   // Mutations (sign + send). `signer` is an account id.
   createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome>;

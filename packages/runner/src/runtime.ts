@@ -18,6 +18,10 @@ import type { RunnerConfig } from './config.js';
 import type { Runner, TickReport } from './runner.js';
 import type { Store } from './store.js';
 import type { LocalQuestion, Phase, QuestionView } from './types.js';
+import { AccessAuth, type AccessClock } from './access/index.js';
+import type { ForecastDeliveryDto, SessionDto, ChallengeDto } from './access/types.js';
+import type { VerifyChallengeInput } from './access/auth.js';
+import type { BalanceView, BuyerReceiptView, PendingWithdrawalView } from './types.js';
 
 /** Snapshot aggregate DTO — the product sold via Forecast Access. No secrets. */
 export interface SnapshotDto {
@@ -99,12 +103,20 @@ export class Runtime {
   readonly chain: ChainClient;
   readonly store: Store;
   readonly runner: Runner;
+  readonly access: AccessAuth;
 
-  constructor(config: RunnerConfig, chain: ChainClient, store: Store, runner: Runner) {
+  constructor(
+    config: RunnerConfig,
+    chain: ChainClient,
+    store: Store,
+    runner: Runner,
+    options?: { clock?: AccessClock },
+  ) {
     this.config = config;
     this.chain = chain;
     this.store = store;
     this.runner = runner;
+    this.access = new AccessAuth(config, chain, store, options?.clock);
   }
 
   getPublicConfig(): PublicConfig {
@@ -247,5 +259,49 @@ export class Runtime {
 
   async tick(): Promise<TickReport> {
     return this.runner.tick();
+  }
+
+  // -------------------------------------------------------------------------
+  // Forecast Access authentication + delivery (ticket #5)
+  // -------------------------------------------------------------------------
+
+  mintAccessChallenge(accountId: string): ChallengeDto {
+    return this.access.mintChallenge(accountId);
+  }
+
+  verifyAccessChallenge(input: VerifyChallengeInput): Promise<{ sessionId: string; dto: SessionDto }> {
+    return this.access.verifyChallenge(input);
+  }
+
+  resolveAccessSession(sessionId: string): string {
+    return this.access.resolveSession(sessionId);
+  }
+
+  deliverForecast(questionId: number, sessionId: string): Promise<ForecastDeliveryDto> {
+    return this.access.deliverForecast(questionId, sessionId);
+  }
+
+  getAccessDisclosure() {
+    return this.access.getDisclosure();
+  }
+
+  // -------------------------------------------------------------------------
+  // Public finalized wallet views (claim/withdraw remain wallet-signed)
+  // -------------------------------------------------------------------------
+
+  async getAccountBalance(accountId: string): Promise<BalanceView | null> {
+    return this.chain.getBalance(accountId);
+  }
+
+  async listPendingWithdrawals(accountId: string, fromIndex: number, limit: number): Promise<PendingWithdrawalView[]> {
+    return this.chain.listPendingWithdrawals(accountId, fromIndex, limit);
+  }
+
+  async getBuyerReceipt(questionId: number, accountId: string): Promise<BuyerReceiptView | null> {
+    return this.chain.getBuyerReceipt(questionId, accountId);
+  }
+
+  async listBuyers(questionId: number, fromIndex: number, limit: number): Promise<BuyerReceiptView[]> {
+    return this.chain.listBuyers(questionId, fromIndex, limit);
   }
 }

@@ -13,7 +13,8 @@
     "test": "node --import tsx --test test/*.test.ts",
     "cli": "tsx src/cli.ts",
     "service": "tsx src/service-entry.ts",
-    "harness:testnet": "tsx harness/lifecycle-harness.ts"
+    "harness:testnet": "tsx harness/lifecycle-harness.ts",
+    "smoke:auth": "tsx harness/auth-smoke.ts"
   },
   "dependencies": {
     "@hivecast/core": "*",

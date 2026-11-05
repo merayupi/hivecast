@@ -41,6 +41,17 @@ export type {
   LeaderboardEntry,
 } from './runtime.js';
 
+// Forecast Access auth + delivery (ticket #5)
+export { AccessAuth, TRUST_DISCLOSURE, AccessError, ACCESS_HTTP_STATUS } from './access/index.js';
+export type {
+  AccessClock,
+  VerifyChallengeInput,
+  AccessErrorCode,
+  ChallengeDto,
+  ForecastDeliveryDto,
+  SessionDto,
+} from './access/index.js';
+
 // Source fetchers
 export {
   fetchCompletedCandles,

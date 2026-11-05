@@ -84,15 +84,46 @@ txHash) is `failed`, but the journal still reconciles before resending.
 
 ## HTTP interface (`src/service.ts`, entry `src/service-entry.ts`)
 
-Public endpoints only; never administrative signing or private forecasts:
+Public endpoints only; never administrative signing, private forecasts, salts,
+signing keys, or the private database. Claim/withdraw remain buyer-wallet-signed
+contract calls; the service never impersonates a buyer.
 
 | Route | Method | Response |
 | --- | --- | --- |
 | `/health` | GET | `{ status: "ok", domain: "hivecast-runner" }` |
 | `/config` | GET | public config (no keys) |
+| `/disclosure` | GET | operator trust disclosure + delivery limits |
+| `/auth/challenge` | POST | mint a one-use NEP-413 challenge (body `{ account_id }`) |
+| `/auth/verify` | POST | verify signature → `Set-Cookie` HttpOnly session (body `{ challenge_id, account_id, public_key, signature }`) |
+| `/auth/logout` | POST | clear session cookie |
+| `/forecast/:id` | GET | frozen Forecast Snapshot (requires session cookie + finalized `has_bought`) |
+| `/account/:id/balance` | GET | finalized `get_balance` (claimable/pending/received) |
+| `/account/:id/pending-withdrawals` | GET | finalized pending withdrawals |
+| `/questions/:id/buyers` | GET | finalized buyer receipts |
+| `/questions/:id/receipt/:account` | GET | finalized buyer receipt |
 | `/questions?from_index&limit` | GET | `{ questions: QuestionView[] }` |
 | `/questions/:id` | GET | `QuestionView` or 404 |
 | `/questions/:id/leaderboard` | GET | `{ question_id, entries: [{accountId, stake, revealed}] }` |
+
+### Forecast Access auth (ticket #5)
+
+Ownership is a one-use, expiring NEP-413 challenge bound to the account,
+service domain, network, contract, challenge identity, and expiry. The server
+reconstructs the exact signed bytes (`SHA-256(LE32(2147484061) ++ Borsh(payload))`,
+`callbackUrl = None`) from durable challenge state + config — never from the
+client — then verifies the Ed25519 signature and checks the claimed key is a
+finalized **FullAccess** key of the account before issuing a session. A public
+account id or transaction hash is never proof. Errors are `{ error, message }`
+with stable codes: `challenge_not_found`, `challenge_expired`,
+`challenge_consumed`, `account_mismatch`, `invalid_signature`,
+`not_full_access`, `unauthenticated`, `not_purchased`,
+`snapshot_unavailable`.
+
+Delivery serves the exact frozen Forecast Snapshot only after a session AND a
+finalized `has_bought(questionId, accountId)`; the frozen snapshot id must equal
+the on-chain `snapshot_id`. Repeat access returns the same payload with no new
+charge. A lost private snapshot or RPC failure returns `snapshot_unavailable`
+(503) — never fabricated data, never an automatic delivery refund.
 
 ## SQLite schema (`src/store.ts`, `node:sqlite`)
 
@@ -112,16 +143,22 @@ question_id cannot be reused across contracts. Tables:
 - `evidence` — exact source evidence (raw response, request URL, model, grid,
   timezone, units, hash) per input/resolve stage.
 - `withdraw_attempts` — per-(account, amount) attempt counter.
+- `access_challenges` — one-use NEP-413 challenges (nonce, bound account/network/
+  contract/domain, expiry, atomic consume).
+- `access_sessions` — authenticated buyer sessions (HttpOnly cookie value).
 
 ## Config (`hivecast.config.example.json`)
 
 Strict JSON (no comments). Copy to `hivecast.config.json` (git-ignored) and
 fill account ids + credential directory. Keys are referenced by path only.
+`access` controls the auth/delivery surface: `sessionTtlMs`, `challengeTtlMs`,
+`cookieName`, `cookieSecure` (set true when served over https), `serviceDomain`,
+and `allowedOrigins` (CORS + CSRF binding for the Vite proxy).
 
 ## Package scripts
 
 ```sh
-npm run test --workspace @hivecast/runner          # 22 tests (commitment/schedule/store/runtime seam)
+npm run test --workspace @hivecast/runner          # seam tests (commitment/schedule/store/runtime/access)
 npm run typecheck --workspace @hivecast/runner
 npm run cli --workspace @hivecast/runner -- create-price <hourStartMs>
 npm run cli --workspace @hivecast/runner -- create-weather <YYYY-MM-DD>
@@ -131,6 +168,7 @@ npm run cli --workspace @hivecast/runner -- status
 npm run cli --workspace @hivecast/runner -- snapshot <questionId>   # private aggregate
 npm run service --workspace @hivecast/runner                          # public HTTP
 npm run harness:testnet --workspace @hivecast/runner -- price         # real-chain lifecycle
+npm run smoke:auth --workspace @hivecast/runner                       # real-testnet NEP-413 login (no purchase)
 ```
 
 ## Exact source semantics (`src/source.ts`)

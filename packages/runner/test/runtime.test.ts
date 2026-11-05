@@ -56,6 +56,14 @@ function configJson(dbPath: string): string {
     kudusLongitude: '110.8397',
     kudusTimezone: 'Asia/Jakarta',
     http: { enabled: false, host: '127.0.0.1', port: 8787 },
+    access: {
+      sessionTtlMs: 86400000,
+      challengeTtlMs: 300000,
+      cookieName: 'hivecast_session',
+      cookieSecure: false,
+      serviceDomain: 'hivecast',
+      allowedOrigins: ['http://localhost:5173'],
+    },
     agentAccounts,
   });
 }
@@ -86,6 +94,14 @@ function buildConfig(dbPath: string): RunnerConfig {
     kudusTimezone: 'Asia/Jakarta',
     operationalGasReserveYocto: 0n,
     http: { enabled: false, host: '127.0.0.1', port: 8787 },
+    access: {
+      sessionTtlMs: 86_400_000,
+      challengeTtlMs: 300_000,
+      cookieName: 'hivecast_session',
+      cookieSecure: false,
+      serviceDomain: 'hivecast',
+      allowedOrigins: ['http://localhost:5173'],
+    },
   };
 }
 
