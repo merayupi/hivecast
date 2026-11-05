@@ -20,11 +20,12 @@
  * report's own floating `brierMean`, which is not money or a timestamp).
  */
 
-import { ONE_NEAR } from '@hivecast/core';
+import { ONE_NEAR, settle } from '@hivecast/core';
 import { loadBundle, runReplay, defaultConfig, DEFAULT_SEED } from '@hivecast/simulation';
 import type { ReplayReport } from '@hivecast/simulation';
 import type { ChainClient } from './chain/types.js';
 import type { CommitmentView, Phase, QuestionView } from './types.js';
+import type { PublicJournalRow } from './store.js';
 
 /** Brier error scale: (p - o)^2 with p,o in bps -> at most 10^8. */
 const BRIER_SQ_SCALE = 100_000_000; // 10^8
@@ -261,4 +262,187 @@ export function formatNearYocto(yocto: string): string {
   const frac6 = (frac * 1_000_000n) / ONE_NEAR;
   const body = `${whole}.${frac6.toString().padStart(6, '0')}`;
   return neg ? `-${body}` : body;
+}
+
+// ---------------------------------------------------------------------------
+// Live account economics (spec stories 68 / 74): Bankroll, Available, locked,
+// Claimable/pending/received, wagering P&L, Query-Fee income, and actual gas —
+// all distinct, all reused from the shared core accounting (no formula fork).
+// ---------------------------------------------------------------------------
+
+export interface AccountEconomics {
+  account_id: string;
+  /** Bankroll = native NEAR balance (keyless view_account; `null` when the RPC
+   * view is unavailable — never a fabricated zero). */
+  bankroll: string | null;
+  /** Available = bankroll − locked stake (`null` when bankroll is unavailable). */
+  available: string | null;
+  /** Stake locked in non-terminal (open/closed/resolved) rounds. */
+  locked_stake: string;
+  /** Finalized chain balance view (claimable/pending/received). */
+  claimable: string;
+  pending: string;
+  received: string;
+  /** Wagering P&L = Σ(basePayout − stake) over settled rounds (exact core settle). */
+  wagering_pnl: string;
+  /** Query-Fee income = Σ(feePayout) over settled rounds (exact core settle). */
+  fee_income: string;
+  /** Actual observed gas cost = Σ(tokens_burnt) over confirmed journal txs. */
+  gas_burnt: string;
+  /** Whether this account has participated in at least one Round. */
+  participated: boolean;
+}
+
+export interface EconomicsReport {
+  network_id: string;
+  contract_id: string;
+  generated_at: string;
+  /**
+   * Wagering P&L, Query-Fee income, and gas are reported separately. Gas is a
+   * cost the Operator pays out of operational reserves, never netted into a
+   * participant's wagering profit or fee income.
+   */
+  separation_note: string;
+  accounts: AccountEconomics[];
+}
+
+/**
+ * Exact live account economics. Wagering P&L and fee income are computed by
+ * replaying each settled Round through the shared `settle` accounting (the
+ * same module the contract mirrors); gas is summed from the public journal's
+ * finalized transaction hashes via `tokens_burnt`. Only the caller-supplied
+ * account set is fetched (bounded), never every on-chain account.
+ */
+export async function computeAccountEconomics(
+  chain: ChainClient,
+  networkId: string,
+  contractId: string,
+  accounts: readonly string[],
+  publicJournal: readonly PublicJournalRow[],
+): Promise<EconomicsReport> {
+  const questions = await listAllQuestions(chain);
+
+  interface Acc {
+    accountId: string;
+    lockedStake: bigint;
+    wageringPnl: bigint;
+    feeIncome: bigint;
+    gasBurnt: bigint;
+    participated: boolean;
+    balance: { claimable: string; pending: string; received: string } | null;
+    bankroll: string | null;
+  }
+  const map = new Map<string, Acc>();
+  for (const id of accounts) {
+    map.set(id, { accountId: id, lockedStake: 0n, wageringPnl: 0n, feeIncome: 0n, gasBurnt: 0n, participated: false, balance: null, bankroll: null });
+  }
+  const ensure = (id: string): Acc => {
+    let a = map.get(id);
+    if (!a) {
+      a = { accountId: id, lockedStake: 0n, wageringPnl: 0n, feeIncome: 0n, gasBurnt: 0n, participated: false, balance: null, bankroll: null };
+      map.set(id, a);
+    }
+    return a;
+  };
+
+  // Gas: sum tokens_burnt over confirmed journal transactions per account.
+  const confirmedByAccount = new Map<string, string[]>();
+  for (const j of publicJournal) {
+    if (j.status !== 'confirmed' || !j.txHash || !j.accountId) continue;
+    const list = confirmedByAccount.get(j.accountId) ?? [];
+    list.push(j.txHash);
+    confirmedByAccount.set(j.accountId, list);
+  }
+  const gasByAccount = new Map<string, bigint>();
+  for (const [accountId, hashes] of confirmedByAccount) {
+    let sum = 0n;
+    for (const h of hashes) {
+      const burnt = await chain.viewTxTokensBurnt(h, accountId);
+      if (burnt !== null) sum += BigInt(burnt);
+    }
+    if (sum > 0n || hashes.length > 0) gasByAccount.set(accountId, sum);
+  }
+
+  for (const q of questions) {
+    const commitments: CommitmentView[] = [];
+    for (let from = 0; from < 64; from += 64) {
+      const page = await chain.listCommitments(q.question_id, from, 64);
+      commitments.push(...page);
+      if (page.length < 64) break;
+    }
+    const terminal = q.phase === 'settled' || q.phase === 'cancelled';
+
+    for (const c of commitments) {
+      const a = ensure(c.account_id);
+      a.participated = true;
+      if (!terminal) a.lockedStake += BigInt(c.stake);
+    }
+
+    if (q.phase === 'settled' && (q.outcome === true || q.outcome === false)) {
+      // Exact allocation via the shared core accounting (no fork).
+      const participants = commitments.map((c) => ({
+        accountId: c.account_id,
+        stake: BigInt(c.stake),
+        probabilityBps: c.revealed ?? 0,
+        isValidRevealer: c.revealed !== null && c.revealed !== undefined,
+      }));
+      const feePool = BigInt(q.fee_pool);
+      const outcomeBps = q.outcome ? 10_000 : 0;
+      const s = settle(participants, outcomeBps, feePool);
+      for (const row of s.rows) {
+        const a = ensure(row.accountId);
+        a.wageringPnl += row.basePayout - row.stake;
+        a.feeIncome += row.feePayout;
+      }
+    }
+    // Cancelled rounds return stakes (no P&L); refunds are buyer-side and not
+    // part of an Agent's wagering economics, so nothing is added here.
+  }
+
+  // Bankroll + final balance view per account (bounded set). Bankroll uses the
+  // keyless `view_account` native balance (amount+locked) so read-only
+  // projections never need a signing key.
+  for (const id of accounts) {
+    const a = map.get(id)!;
+    try {
+      a.bankroll = (await chain.viewNativeBalance(id)).toString();
+    } catch {
+      a.bankroll = null;
+    }
+    try {
+      const b = await chain.getBalance(id);
+      a.balance = { claimable: b.claimable, pending: b.pending, received: b.received };
+    } catch {
+      a.balance = null;
+    }
+  }
+
+  const rows: AccountEconomics[] = [...map.values()]
+    .filter((a) => a.participated || a.balance !== null || gasByAccount.has(a.accountId))
+    .map((a) => {
+      const available = a.bankroll === null ? null : BigInt(a.bankroll) - a.lockedStake < 0n ? 0n : BigInt(a.bankroll) - a.lockedStake;
+      return {
+        account_id: a.accountId,
+        bankroll: a.bankroll,
+        available: available === null ? null : available.toString(),
+        locked_stake: a.lockedStake.toString(),
+        claimable: a.balance?.claimable ?? '0',
+        pending: a.balance?.pending ?? '0',
+        received: a.balance?.received ?? '0',
+        wagering_pnl: a.wageringPnl.toString(),
+        fee_income: a.feeIncome.toString(),
+        gas_burnt: (gasByAccount.get(a.accountId) ?? 0n).toString(),
+        participated: a.participated,
+      };
+    })
+    .sort((x, y) => (x.account_id < y.account_id ? -1 : 1));
+
+  return {
+    network_id: networkId,
+    contract_id: contractId,
+    generated_at: new Date().toISOString(),
+    separation_note:
+      'Wagering P&L, Query-Fee income, and gas are separate. Gas is an operational cost (paid by the Operator), never netted into a participant wagering profit or fee income. Available = bankroll − locked stake is a public projection that cannot see private capital reservations.',
+    accounts: rows,
+  };
 }

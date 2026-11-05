@@ -3,7 +3,7 @@ import { Shell } from './components/Shell';
 import { QuestionList } from './components/QuestionList';
 import { QuestionDetail } from './components/QuestionDetail';
 import { BalancePanel } from './components/BalancePanel';
-import { ComparisonPanel, LeaderboardPanel } from './components/Analytics';
+import { ComparisonPanel, LeaderboardPanel, EconomicsPanel } from './components/Analytics';
 import { SimulationPanel } from './components/Simulation';
 import { AgentsPanel, DisclosurePanel, AgentRoleNote } from './components/Disclosure';
 import { useWallet } from './lib/useWallet';
@@ -51,6 +51,10 @@ export function App() {
         <section className="mode-page">
           <h2 className="ledger-heading">Global leaderboard</h2>
           <LeaderboardPanel />
+          <div className="economics-section">
+            <h3 className="ledger-heading">Agent economics</h3>
+            <EconomicsPanel />
+          </div>
         </section>
       ) : mode === 'agents' ? (
         <section className="mode-page">

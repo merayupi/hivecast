@@ -9,6 +9,7 @@ import type {
   ApiError,
   BalanceView,
   ChallengeDto,
+  EconomicsReport,
   ForecastDeliveryDto,
   GlobalLeaderboard,
   PendingWithdrawalView,
@@ -65,6 +66,7 @@ export const api = {
   question: (id: number) => get<QuestionView>(`/questions/${id}`),
   comparison: (id: number) => get<QuestionComparison>(`/questions/${id}/comparison`),
   leaderboard: () => get<GlobalLeaderboard>('/analytics/leaderboard'),
+  economics: () => get<EconomicsReport>('/analytics/economics'),
   simulation: () => get<ReplayReport>('/simulation/report'),
   balance: (accountId: string) => get<BalanceView>(`/account/${accountId}/balance`),
   pendingWithdrawals: async (accountId: string) =>

@@ -61,6 +61,21 @@ export interface AccessSessionRow {
   expiresAtMs: number;
 }
 
+/**
+ * A public-safe projection of one journal entry: transaction hash + kind +
+ * account + question + status only. Never exposes `payloadJson` (forecasts/
+ * salts/signed bytes), `dedupKey`, or `error` internals.
+ */
+export interface PublicJournalRow {
+  txHash: string | null;
+  kind: JournalKind;
+  accountId: string | null;
+  questionId: number | null;
+  status: JournalStatus;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export class Store {
   private db: DatabaseSync;
 
@@ -585,6 +600,24 @@ export class Store {
       ? (this.db.prepare('SELECT * FROM journal WHERE kind = ? ORDER BY id ASC').all(kind) as Record<string, unknown>[])
       : (this.db.prepare('SELECT * FROM journal ORDER BY id ASC').all() as Record<string, unknown>[]);
     return rows.map((r) => this.rowToJournal(r));
+  }
+
+  /** Public-safe journal projection (no payload/salt/signed bytes/dedup key). */
+  listPublicJournal(): PublicJournalRow[] {
+    const rows = this.db
+      .prepare(
+        'SELECT tx_hash, kind, account_id, question_id, status, created_at, updated_at FROM journal ORDER BY id ASC',
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      txHash: r.tx_hash as string | null,
+      kind: r.kind as JournalKind,
+      accountId: r.account_id as string | null,
+      questionId: r.question_id === null ? null : Number(r.question_id),
+      status: r.status as JournalStatus,
+      createdAtMs: Number(r.created_at),
+      updatedAtMs: Number(r.updated_at),
+    }));
   }
 
   // -------------------------------------------------------------------------

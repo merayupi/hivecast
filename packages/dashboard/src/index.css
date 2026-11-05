@@ -270,6 +270,8 @@
   .shell-main { min-height: 60vh; }
   .mode-page { max-width: 960px; }
   .mode-page > h2 { margin: 0 0 1rem; }
+  .economics-section { margin-top: 2rem; }
+  .economics-section > h3 { margin: 0 0 0.75rem; font-size: 1.05rem; }
 
   /* ---- Live view (list + detail) ---- */
   .live-view {

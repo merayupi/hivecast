@@ -169,6 +169,11 @@ export function createPublicService(runtime: Runtime): Server {
         return sendJson(res, 200, board, runtime);
       }
 
+      if (req.method === 'GET' && url.pathname === '/analytics/economics') {
+        const economics = await runtime.getEconomics();
+        return sendJson(res, 200, economics, runtime);
+      }
+
       // ---- Forecast Access authentication ---------------------------------
 
       if (req.method === 'POST' && url.pathname === '/auth/challenge') {

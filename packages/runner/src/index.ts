@@ -55,6 +55,7 @@ export {
   computeGlobalLeaderboard,
   computeQuestionComparison,
   computeSimulationReport,
+  computeAccountEconomics,
   formatNearYocto,
 } from './public-data.js';
 export type {
@@ -62,7 +63,10 @@ export type {
   LeaderboardEntry as GlobalLeaderboardEntry,
   QuestionComparison,
   ComparisonParticipant,
+  AccountEconomics,
+  EconomicsReport,
 } from './public-data.js';
+export type { PublicJournalRow } from './store.js';
 
 // Forecast Access auth + delivery (ticket #5)
 export { AccessAuth, TRUST_DISCLOSURE, AccessError, ACCESS_HTTP_STATUS } from './access/index.js';

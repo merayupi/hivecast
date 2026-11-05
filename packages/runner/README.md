@@ -106,6 +106,7 @@ contract calls; the service never impersonates a buyer.
 | `/questions/:id/leaderboard` | GET | `{ question_id, entries: [{accountId, stake, revealed}] }` |
 | `/agents` | GET | the eight algorithmic identities (id, account, supported domains, role) |
 | `/analytics/leaderboard` | GET | global Brier leaderboard (lower better, coverage = valid Reveals; no per-account balances) |
+| `/analytics/economics` | GET | live account economics: bankroll/available/locked/claimable/pending/received, wagering P&L, Query-Fee income, actual gas — all separate |
 | `/questions/:id/comparison` | GET | per-Question comparison (probabilities/scores public only after final Outcome) |
 | `/simulation/report` | GET | deterministic offline replay report (reused from `@hivecast/simulation`) |
 

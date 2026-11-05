@@ -94,7 +94,7 @@ export class WalletConnector {
     gas: string;
     deposit: string;
     contractId: string;
-  }): Promise<string> {
+  }): Promise<ConfirmedCall> {
     const wallet = await this.connector.wallet();
     const outcome = await wallet.signAndSendTransaction({
       signerId: params.accountId,
@@ -111,11 +111,52 @@ export class WalletConnector {
         },
       ],
     });
-    if (typeof outcome.status === 'object' && outcome.status !== null && 'Failure' in outcome.status) {
-      throw new Error(`transaction failed: ${JSON.stringify(outcome.status.Failure)}`);
-    }
-    return outcome.transaction.hash;
+    return classifyOutcome(outcome);
   }
+}
+
+/** A successful, finalized contract call: FINAL execution status + SuccessValue. */
+export interface ConfirmedCall {
+  txHash: string;
+  result: string | null;
+}
+
+/**
+ * The one place that decides whether a wallet transaction is *confirmed*.
+ * near-connect does not expose `waitUntil`; a wallet may return an included-but
+ * not-finalized outcome, and `status` can be `NotStarted`/`Started`/
+ * `SuccessReceiptId`/`Unknown` for a still-pending call. Only
+ * `final_execution_status === 'FINAL'` **and** a `SuccessValue` count as done;
+ * a `Failure` throws; anything else is a *pending* state the caller must keep
+ * polling, never a silent success.
+ */
+function classifyOutcome(outcome: unknown): ConfirmedCall {
+  const o = outcome as {
+    final_execution_status?: string;
+    status?: unknown;
+    transaction?: { hash?: string };
+  };
+  const status = o.status;
+
+  if (typeof status === 'object' && status !== null && 'Failure' in status) {
+    throw new Error(`transaction failed: ${JSON.stringify(status.Failure)}`);
+  }
+
+  const isFinal = o.final_execution_status === 'FINAL';
+  const isSuccess = typeof status === 'object' && status !== null && 'SuccessValue' in status;
+  if (!isFinal || !isSuccess) {
+    throw new Error(
+      `transaction not finalized (status ${o.final_execution_status ?? 'unknown'}); wait and refresh — it may still confirm`,
+    );
+  }
+
+  let result: string | null = null;
+  const sv = status.SuccessValue;
+  if (typeof sv === 'string' && sv.length > 0) {
+    const bytes = Uint8Array.from(atob(sv), (c) => c.charCodeAt(0));
+    result = new TextDecoder().decode(bytes);
+  }
+  return { txHash: o.transaction?.hash ?? '', result };
 }
 
 /** A single shared connector (created once, as near-connect requires). */

@@ -28,8 +28,9 @@ import {
   computeGlobalLeaderboard,
   computeQuestionComparison,
   computeSimulationReport,
+  computeAccountEconomics,
 } from './public-data.js';
-import type { GlobalLeaderboard, QuestionComparison } from './public-data.js';
+import type { GlobalLeaderboard, QuestionComparison, EconomicsReport } from './public-data.js';
 import type { ReplayReport } from '@hivecast/simulation';
 
 /** Public Agent roster entry: identity, supported domains, and account. */
@@ -207,6 +208,27 @@ export class Runtime {
   /** Deterministic offline simulation report (reused from @hivecast/simulation). */
   getSimulationReport(): ReplayReport {
     return computeSimulationReport();
+  }
+
+  /**
+   * Live account economics (bankroll/available/locked/claimable/pending/
+   * received, wagering P&L, Query-Fee income, actual gas) for the bounded
+   * Operator-controlled account set + any journal participants. Reuses the
+   * shared core `settle` accounting; gas comes from finalized journal hashes.
+   */
+  async getEconomics(): Promise<EconomicsReport> {
+    const accounts = new Set<string>([
+      this.config.operatorId,
+      this.config.resolverId,
+      ...Object.values(this.config.agentAccounts),
+    ]);
+    return computeAccountEconomics(
+      this.chain,
+      this.config.networkId,
+      this.config.contractId,
+      [...accounts],
+      this.store.listPublicJournal(),
+    );
   }
 
   // -------------------------------------------------------------------------

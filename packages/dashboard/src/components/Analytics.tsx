@@ -1,6 +1,6 @@
 import { usePolling } from '../lib/hooks';
 import { api } from '../lib/api';
-import type { QuestionComparison, GlobalLeaderboard } from '../lib/types';
+import type { QuestionComparison, GlobalLeaderboard, EconomicsReport } from '../lib/types';
 import { near, pct, brier } from '../lib/format';
 import { Stat, Panel, ErrorNote, EmptyState, Chip } from './ui';
 
@@ -66,6 +66,62 @@ export function LeaderboardPanel() {
     return <EmptyState title="No scored rounds yet" detail="Brier scores appear once a Round resolves with Reveals. Coverage is valid Reveals only." />;
   }
   return <LeaderboardTable board={data} />;
+}
+
+/**
+ * Live account economics: Bankroll / Available / locked / Claimable / pending /
+ * received, wagering P&L, Query-Fee income, and actual gas — each reported
+ * separately (gas is never netted into profit or fee income).
+ */
+export function EconomicsPanel() {
+  const { data, error, loading } = usePolling(() => api.economics(), 30_000, []);
+
+  if (loading) return <p className="muted-line">Loading economics…</p>;
+  if (error) return <ErrorNote message={error} />;
+  if (!data || data.accounts.length === 0) {
+    return <EmptyState title="No economics yet" detail="Agent economics appear once rounds exist and the Operator journal has finalized transactions." />;
+  }
+  return <EconomicsTable report={data} />;
+}
+
+function EconomicsTable({ report }: { report: EconomicsReport }) {
+  return (
+    <div>
+      <p className="muted-line small-caps">{report.separation_note}</p>
+      <table className="ledger-table">
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th className="num">Bankroll</th>
+            <th className="num">Available</th>
+            <th className="num">Locked</th>
+            <th className="num">Claimable</th>
+            <th className="num">Pending</th>
+            <th className="num">Received</th>
+            <th className="num">Wagering P&amp;L</th>
+            <th className="num">Fee income</th>
+            <th className="num">Gas</th>
+          </tr>
+        </thead>
+        <tbody>
+          {report.accounts.map((a) => (
+            <tr key={a.account_id}>
+              <td className="num">{a.account_id}</td>
+              <td className="num">{a.bankroll === null ? '—' : `${near(a.bankroll)} Ⓝ`}</td>
+              <td className="num">{a.available === null ? '—' : `${near(a.available)} Ⓝ`}</td>
+              <td className="num">{near(a.locked_stake)} Ⓝ</td>
+              <td className="num">{near(a.claimable)} Ⓝ</td>
+              <td className="num">{near(a.pending)} Ⓝ</td>
+              <td className="num">{near(a.received)} Ⓝ</td>
+              <td className={`num ${BigInt(a.wagering_pnl) < 0n ? 'text-vermilion-700' : ''}`}>{near(a.wagering_pnl)} Ⓝ</td>
+              <td className="num">{near(a.fee_income)} Ⓝ</td>
+              <td className="num">{near(a.gas_burnt)} Ⓝ</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function LeaderboardTable({ board }: { board: GlobalLeaderboard }) {

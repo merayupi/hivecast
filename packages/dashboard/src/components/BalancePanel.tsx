@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiClientError } from '../lib/api';
 import type { BalanceView, PendingWithdrawalView } from '../lib/types';
 import { near, explorerTxUrl } from '../lib/format';
@@ -9,9 +9,10 @@ const GAS = '30000000000000';
 
 /**
  * Claimable / pending / received are distinct. Settlement is not proof of
- * received funds: claim makes a buyer refund claimable, withdraw moves
- * claimable into a pending transfer that the contract's private callback
- * later confirms as received.
+ * received funds: withdraw moves claimable into a pending transfer that the
+ * contract's private callback later confirms as delivered (or restores on
+ * failure). The panel polls the finalized balance + pending list until the
+ * transfer reaches a terminal state; it never reports "done" early.
  */
 export function BalancePanel({
   accountId,
@@ -29,6 +30,7 @@ export function BalancePanel({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [inFlight, setInFlight] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -42,14 +44,37 @@ export function BalancePanel({
   }, [accountId]);
 
   useEffect(() => {
+    setBalance(null);
+    setPending([]);
+    setError(null);
+    setBusy(null);
+    setTxHash(null);
+    setInFlight(false);
     void load();
   }, [load]);
+
+  // While a withdrawal is in flight, poll until no pending row remains (or the
+  // account changes). A pending row that reaches delivered/restored stops the loop.
+  const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  useEffect(() => {
+    if (!inFlight) return;
+    pollRef.current = setInterval(() => {
+      void load().catch(() => {});
+    }, 5000);
+    return () => clearInterval(pollRef.current);
+  }, [inFlight, load]);
+
+  useEffect(() => {
+    if (!inFlight) return;
+    const terminal = pending.length === 0 || pending.every((w) => w.status !== 'pending');
+    if (terminal) setInFlight(false);
+  }, [pending, inFlight]);
 
   const call = async (methodName: string, args: Record<string, unknown>, deposit: string) => {
     setBusy(methodName);
     setError(null);
     try {
-      const hash = await walletConnector().call({
+      const confirmed = await walletConnector().call({
         accountId,
         contractId,
         methodName,
@@ -57,12 +82,17 @@ export function BalancePanel({
         gas: GAS,
         deposit,
       });
-      setTxHash(hash);
+      setTxHash(confirmed.txHash);
       await load();
     } catch (err) {
       const msg = err instanceof ApiClientError ? `${err.code}: ${err.message}` : (err as Error).message;
-      setError(msg);
-      onAuthRequired();
+      if (msg.startsWith('transaction not finalized')) {
+        setInFlight(true);
+        setError('Withdrawal submitted — waiting for finalization and the transfer callback.');
+      } else {
+        setError(msg);
+        onAuthRequired();
+      }
     } finally {
       setBusy(null);
     }
@@ -96,7 +126,7 @@ export function BalancePanel({
 
           {pending.length > 0 ? (
             <div className="pending-list">
-              <p className="small-caps">Pending withdrawals</p>
+              <p className="small-caps">Withdrawals</p>
               {pending.map((w) => (
                 <div key={w.nonce} className="pending-row num">
                   <span>#{w.nonce}</span>
@@ -110,6 +140,7 @@ export function BalancePanel({
           ) : null}
         </>
       )}
+      {inFlight ? <p className="muted-line small-caps">Waiting for the transfer to finalize…</p> : null}
       {error ? <ErrorNote message={error} /> : null}
     </Panel>
   );

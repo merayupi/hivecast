@@ -1,23 +1,56 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiClientError } from '../lib/api';
 import type { ForecastDeliveryDto, QuestionView } from '../lib/types';
-import { near, pct, fmtDateTimeTz, domainTimeZone, questionDomain, sourceLabel, explorerTxUrl } from '../lib/format';
+import { near, pct, nsDate, fmtDateTimeTz, domainTimeZone, questionDomain, sourceLabel, explorerTxUrl } from '../lib/format';
 import { PhaseLadder } from './PhaseLadder';
 import { Chip, DomainChip, SingleAgentMark, Stat, Panel, ErrorNote } from './ui';
 import type { WalletState } from '../lib/useWallet';
 import { walletConnector } from '../lib/wallet';
 
 const BUY_GAS = '30000000000000';
+const NS_PER_MS = 1_000_000n;
+
+interface ReceiptState {
+  refunded: boolean;
+  price: string;
+}
+
+/** True only while the Question is actually for sale (closed AND before observation). */
+function inSaleWindow(q: QuestionView, nowMs: number): boolean {
+  if (q.phase !== 'closed') return false;
+  if (!q.snapshot_ready || q.participant_count === 0) return false;
+  const nowNs = BigInt(nowMs) * NS_PER_MS;
+  return BigInt(q.close_time) <= nowNs && nowNs < BigInt(q.observation_start);
+}
 
 export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletState }) {
   const [delivery, setDelivery] = useState<ForecastDeliveryDto | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<{ refunded: boolean; price: string } | null>(null);
+  const [receipt, setReceipt] = useState<ReceiptState | null>(null);
+  const [pendingTx, setPendingTx] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const accountId = wallet.accountId;
   const networkId = wallet.config?.networkId ?? 'testnet';
+
+  // Reset all cached per-Question/per-identity state when either changes, so a
+  // private delivery/receipt never leaks across a Question or an account switch.
+  useEffect(() => {
+    setDelivery(null);
+    setReceipt(null);
+    setTxHash(null);
+    setFetchError(null);
+    setPendingTx(false);
+    setBusy(null);
+  }, [q.question_id, accountId]);
+
+  // Wall clock for the countdown + sale window.
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const loadReceipt = useCallback(async () => {
     if (!accountId) return;
@@ -29,15 +62,34 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
     void loadReceipt();
   }, [loadReceipt]);
 
-  const canBuy = q.phase === 'closed' && q.snapshot_ready && !receipt && q.participant_count > 0;
-  const saleWindowOpen = q.phase === 'closed' && q.participant_count > 0 && q.snapshot_ready;
+  // While a buy/claim is in flight (included but not yet finalized), poll the
+  // receipt view until it lands or the window/identity changes. Never report
+  // "complete" before the finalized receipt is observed.
+  const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  useEffect(() => {
+    if (!pendingTx) return;
+    pollRef.current = setInterval(() => {
+      void loadReceipt().catch(() => {
+        // transient read failure: keep polling
+      });
+    }, 4000);
+    return () => clearInterval(pollRef.current);
+  }, [pendingTx, loadReceipt]);
+
+  // Stop polling once the receipt appears (purchase/refund observed finalized).
+  useEffect(() => {
+    if (receipt && pendingTx) setPendingTx(false);
+  }, [receipt, pendingTx]);
+
+  const saleOpen = inSaleWindow(q, nowMs);
+  const canBuy = saleOpen && !receipt;
 
   const buy = async () => {
     if (!accountId || !wallet.config) return;
     setBusy('buy');
     setFetchError(null);
     try {
-      const hash = await walletConnector().call({
+      const confirmed = await walletConnector().call({
         accountId,
         contractId: wallet.config.contractId,
         methodName: 'buy_forecast',
@@ -45,10 +97,17 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
         gas: BUY_GAS,
         deposit: q.access_price,
       });
-      setTxHash(hash);
+      setTxHash(confirmed.txHash);
       await loadReceipt();
     } catch (err) {
-      setFetchError((err as Error).message);
+      const msg = (err as Error).message;
+      // An included-but-not-finalized call is pending, not failed: keep polling.
+      if (msg.startsWith('transaction not finalized')) {
+        setPendingTx(true);
+        setFetchError('Purchase submitted — waiting for finalization, then the receipt will appear.');
+      } else {
+        setFetchError(msg);
+      }
     } finally {
       setBusy(null);
     }
@@ -73,7 +132,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
     setBusy('claim');
     setFetchError(null);
     try {
-      const hash = await walletConnector().call({
+      const confirmed = await walletConnector().call({
         accountId,
         contractId: wallet.config.contractId,
         methodName: 'claim_buyer_refund',
@@ -81,10 +140,16 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
         gas: BUY_GAS,
         deposit: '0',
       });
-      setTxHash(hash);
+      setTxHash(confirmed.txHash);
       await loadReceipt();
     } catch (err) {
-      setFetchError((err as Error).message);
+      const msg = (err as Error).message;
+      if (msg.startsWith('transaction not finalized')) {
+        setPendingTx(true);
+        setFetchError('Claim submitted — waiting for finalization.');
+      } else {
+        setFetchError(msg);
+      }
     } finally {
       setBusy(null);
     }
@@ -154,11 +219,12 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
               <p className="muted-line">Reading requires wallet login (NEP-413) to prove you own this account.</p>
             ) : null}
           </div>
-        ) : saleWindowOpen ? (
+        ) : saleOpen ? (
           <div className="access-buy">
             <p className="muted-line">
               Purchase is exact-once: {near(q.access_price)} Ⓝ for this frozen Forecast Snapshot. Wrong amount,
-              duplicate, or out-of-window purchases are rejected on-chain.
+              duplicate, or out-of-window purchases are rejected on-chain. Sale closes at{' '}
+              {fmtDateTimeTz(q.observation_start, domainTimeZone(questionDomain(q.source)))}.
             </p>
             <button type="button" className="btn btn-vermilion" onClick={buy} disabled={busy !== null || !canBuy}>
               {busy === 'buy' ? 'Signing…' : `Buy for ${near(q.access_price)} Ⓝ`}
@@ -168,11 +234,14 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
           <p className="muted-line">
             {q.phase === 'open'
               ? 'Sales open after the commitment cutoff, once the snapshot is frozen and before observation.'
-              : q.participant_count === 0
-                ? 'This Round has no participants; the forecast cannot be sold.'
-                : 'This forecast is no longer for sale (observation started or the window passed).'}
+              : q.phase === 'closed' && nsDate(q.observation_start).getTime() <= nowMs
+                ? 'Sales have closed: observation started.'
+                : q.participant_count === 0
+                  ? 'This Round has no participants; the forecast cannot be sold.'
+                  : 'This forecast is not for sale (snapshot not ready or window passed).'}
           </p>
         )}
+        {pendingTx ? <p className="muted-line small-caps">Waiting for the transaction to finalize…</p> : null}
         {fetchError ? <ErrorNote message={fetchError} /> : null}
       </Panel>
     </div>

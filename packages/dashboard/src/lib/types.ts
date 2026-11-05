@@ -165,6 +165,28 @@ export interface GlobalLeaderboard {
   entries: LeaderboardEntry[];
 }
 
+export interface AccountEconomics {
+  account_id: string;
+  bankroll: string | null;
+  available: string | null;
+  locked_stake: string;
+  claimable: string;
+  pending: string;
+  received: string;
+  wagering_pnl: string;
+  fee_income: string;
+  gas_burnt: string;
+  participated: boolean;
+}
+
+export interface EconomicsReport {
+  network_id: string;
+  contract_id: string;
+  generated_at: string;
+  separation_note: string;
+  accounts: AccountEconomics[];
+}
+
 export interface AgentRoundRecord {
   roundKey: string;
   probabilityBps: number;
