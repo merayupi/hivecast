@@ -56,6 +56,32 @@ export function fmtDateTimeTz(ns: string, timeZone: 'UTC' | 'Asia/Jakarta'): str
   });
 }
 
+/**
+ * Date and time split for the phase ladder, so each milestone's full terms are
+ * readable on two lines instead of being ellipsized into "5 Nov 2026, …".
+ */
+export function fmtDateParts(
+  ns: string,
+  timeZone: 'UTC' | 'Asia/Jakarta',
+): { date: string; time: string } {
+  const d = nsDate(ns);
+  const date = d.toLocaleDateString('en-GB', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone,
+  });
+  const time = d.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZone,
+    timeZoneName: 'short',
+  });
+  return { date, time };
+}
+
 /** The event's declared timezone for a domain. */
 export function domainTimeZone(domain: Domain): 'UTC' | 'Asia/Jakarta' {
   return domain === 'price' ? 'UTC' : 'Asia/Jakarta';
