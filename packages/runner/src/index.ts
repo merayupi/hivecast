@@ -46,7 +46,23 @@ export type {
   LifecycleStatus,
   PublicConfig,
   LeaderboardEntry,
+  AgentRosterEntry,
 } from './runtime.js';
+
+// Public analytics / comparison / provenance (ticket #6)
+export {
+  listAllQuestions,
+  computeGlobalLeaderboard,
+  computeQuestionComparison,
+  computeSimulationReport,
+  formatNearYocto,
+} from './public-data.js';
+export type {
+  GlobalLeaderboard,
+  LeaderboardEntry as GlobalLeaderboardEntry,
+  QuestionComparison,
+  ComparisonParticipant,
+} from './public-data.js';
 
 // Forecast Access auth + delivery (ticket #5)
 export { AccessAuth, TRUST_DISCLOSURE, AccessError, ACCESS_HTTP_STATUS } from './access/index.js';

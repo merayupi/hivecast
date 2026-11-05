@@ -13,6 +13,8 @@
  * remains in the operator CLI (cli.ts) and Runner.
  */
 
+import { AGENT_IDS, STRATEGY_DOMAINS } from '@hivecast/core';
+import type { AgentId } from '@hivecast/core';
 import type { ChainClient } from './chain/types.js';
 import type { RunnerConfig } from './config.js';
 import type { Runner, TickReport } from './runner.js';
@@ -22,6 +24,21 @@ import { AccessAuth, type AccessClock } from './access/index.js';
 import type { ForecastDeliveryDto, SessionDto, ChallengeDto } from './access/types.js';
 import type { VerifyChallengeInput } from './access/auth.js';
 import type { BalanceView, BuyerReceiptView, PendingWithdrawalView } from './types.js';
+import {
+  computeGlobalLeaderboard,
+  computeQuestionComparison,
+  computeSimulationReport,
+} from './public-data.js';
+import type { GlobalLeaderboard, QuestionComparison } from './public-data.js';
+import type { ReplayReport } from '@hivecast/simulation';
+
+/** Public Agent roster entry: identity, supported domains, and account. */
+export interface AgentRosterEntry {
+  agentId: AgentId;
+  accountId: string;
+  domains: readonly string[];
+  role: string;
+}
 
 /** Snapshot aggregate DTO — the product sold via Forecast Access. No secrets. */
 export interface SnapshotDto {
@@ -153,6 +170,43 @@ export class Runtime {
       stake: c.stake,
       revealed: c.revealed,
     }));
+  }
+
+  /**
+   * The eight algorithmic identities with their supported domains and account
+   * ids. Account ids are on-chain public; no keys, salts, or forecasts.
+   */
+  getAgentRoster(): AgentRosterEntry[] {
+    return (AGENT_IDS as readonly AgentId[]).map((agentId) => ({
+      agentId,
+      accountId: this.config.agentAccounts[agentId] ?? '',
+      domains: STRATEGY_DOMAINS[agentId],
+      role:
+        agentId === 'meteo' || agentId === 'climatology'
+          ? 'weather'
+          : agentId === 'momentum' || agentId === 'meanrev'
+            ? 'price'
+            : 'both',
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Public analytics / comparison / provenance (ticket #6)
+  // -------------------------------------------------------------------------
+
+  /** Global Brier leaderboard over finalized public chain state. */
+  async getGlobalLeaderboard(): Promise<GlobalLeaderboard> {
+    return computeGlobalLeaderboard(this.chain, this.config.networkId, this.config.contractId);
+  }
+
+  /** Per-Question public comparison (scores only once the Outcome is final). */
+  async getQuestionComparison(questionId: number): Promise<QuestionComparison | null> {
+    return computeQuestionComparison(this.chain, questionId);
+  }
+
+  /** Deterministic offline simulation report (reused from @hivecast/simulation). */
+  getSimulationReport(): ReplayReport {
+    return computeSimulationReport();
   }
 
   // -------------------------------------------------------------------------

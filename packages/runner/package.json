@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@hivecast/core": "*",
+    "@hivecast/simulation": "*",
     "near-api-js": "^7.4.0"
   }
 }
