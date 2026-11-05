@@ -19,8 +19,8 @@ anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 # Official near-sandbox harness. Tests deploy the already-built release WASM
 # artifact via `dev_deploy`, so the `unstable` (compile_project) feature is not
-# needed. 0.24 ships near-jsonrpc-client 0.23 whose RPC/validator view types
-# include the fields (e.g. `is_slashed`) that near-sandbox 2.14 emits.
+# needed. 0.24 ships near-jsonrpc-client 0.23 with protocol-88-compatible RPC
+# types for near-sandbox 2.14.
 near-workspaces = "0.24"
 # Independent commitment-encoding primitives for the sandbox test.
 borsh = { version = "1", features = ["derive"] }
