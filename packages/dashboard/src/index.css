@@ -175,13 +175,21 @@
     line-height: 1.25;
   }
   .phase-time {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: flex;
+    flex-direction: column;
     font-size: 0.62rem;
     color: var(--color-ink-500);
     max-width: 100%;
     min-width: 0;
+  }
+  .phase-date {
+    white-space: normal;
+    overflow-wrap: break-word;
+    line-height: 1.25;
+  }
+  .phase-clock {
+    white-space: nowrap;
+    line-height: 1.25;
   }
   .phase-now {
     display: flex;

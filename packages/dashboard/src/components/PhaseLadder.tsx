@@ -1,5 +1,5 @@
 import type { QuestionView } from '../lib/types';
-import { countdown, fmtDateTimeTz, domainTimeZone, questionDomain } from '../lib/format';
+import { countdown, fmtDateParts, fmtDateTimeTz, domainTimeZone, questionDomain } from '../lib/format';
 
 interface Milestone {
   key: string;
@@ -45,6 +45,7 @@ export function PhaseLadder({ q, nowMs }: { q: QuestionView; nowMs: number }) {
         {points.map((p, i) => {
           if (p.ns === null) return <li key={p.key} className="phase-node" />;
           const done = i <= active;
+          const parts = fmtDateParts(p.ns, tz);
           return (
             <li key={p.key} className="phase-node">
               <span
@@ -52,7 +53,10 @@ export function PhaseLadder({ q, nowMs }: { q: QuestionView; nowMs: number }) {
                 aria-hidden="true"
               />
               <span className="phase-label small-caps">{p.label}</span>
-              <span className="phase-time num">{fmtDateTimeTz(p.ns, tz)}</span>
+              <span className="phase-time num">
+                <span className="phase-date">{parts.date}</span>
+                <span className="phase-clock">{parts.time}</span>
+              </span>
             </li>
           );
         })}
