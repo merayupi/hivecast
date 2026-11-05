@@ -15,12 +15,17 @@
  *   5. no session cookie → 401 (a public account id / tx hash is not proof)
  *   6. replay of a consumed challenge → 401 challenge_consumed
  *   7. expiry → 401 challenge_expired (controllable wall clock)
- *   8. wrong service context (network/contract) → 401 account_mismatch
+ *   8. axis-isolated context mismatches (wrong network ONLY / wrong contract
+ *      ONLY / wrong service domain ONLY / wrong claimed account ONLY / another
+ *      account's FullAccess key / wrong browser Origin) — each fail closed
  *   9. wrong recipient (signature over a different recipient) → invalid_signature
  *  10. a function-call key (not FullAccess) → 401 not_full_access
  *  11. concurrent challenge consumption admits exactly one verifier
  *  12. missing private snapshot → 503 snapshot_unavailable (no fabricated data)
- *  13. TS → WASM reveal integration: resolve with the pinned resolver, reveal
+ *  13. delivery interruption recovery: reopen the durable DB, buyer reuses the
+ *      SAME session/entitlement → 200 same frozen DTO, no second purchase, no
+ *      automatic refund
+ *  14. TS → WASM reveal integration: resolve with the pinned resolver, reveal
  *      via NearChainClient using the ORIGINAL commitment prob/salt, assert the
  *      on-chain get_commitment reveals the same probability, settle after the
  *      real reveal deadline, and withdraw to a real recipient balance increase.
@@ -581,6 +586,39 @@ async function main(): Promise<void> {
       return { status: res.status, body: (await res.json()) as Record<string, unknown> };
     }
 
+    /** Serve the SAME durable store under a config with ONE axis overridden, so
+     * the challenge lookup succeeds and only the overridden axis fails. */
+    async function serveWithConfig(overrides: Partial<RunnerConfig>): Promise<{ base: string; close: () => Promise<void> }> {
+      const cfg = baseConfig();
+      Object.assign(cfg, overrides);
+      const rt = new Runtime(cfg, chain, store, runner, { clock });
+      const svr = createPublicService(rt);
+      await new Promise<void>((resolve) => svr.listen(0, '127.0.0.1', resolve));
+      const a = svr.address();
+      assert.ok(a && typeof a === 'object');
+      return {
+        base: `http://127.0.0.1:${a.port}`,
+        close: () => new Promise<void>((resolve) => svr.close(() => resolve())),
+      };
+    }
+
+    async function verifyAt(
+      targetBase: string,
+      params: { challengeId: string; accountId: string; publicKey: string; signature: string },
+    ): Promise<{ status: number; body: Record<string, unknown> }> {
+      const res = await fetch(`${targetBase}/auth/verify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
+        body: JSON.stringify({
+          challenge_id: params.challengeId,
+          account_id: params.accountId,
+          public_key: params.publicKey,
+          signature: params.signature,
+        }),
+      });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    }
+
     const steps: string[] = [];
 
     // 2. Valid login + frozen payload.
@@ -596,10 +634,16 @@ async function main(): Promise<void> {
     assert.equal(d1.body.single_agent, true);
     steps.push('purchase+login+delivery');
 
-    // 3. Repeat access — same frozen payload, no new charge.
+    // 3. Repeat access — the ENTIRE frozen DTO is identical (no variable
+    // timestamp fields in the delivery DTO) and no new charge: buyer_count and
+    // fee_pool are unchanged on the finalized chain.
     const d2 = await deliver(v1.cookie);
     assert.equal(d2.status, 200);
-    assert.equal(d2.body.snapshot_id, snapshotId);
+    assert.deepEqual(d2.body, d1.body, 'repeat delivery must be byte-identical frozen DTO');
+    const qBeforeRepeat = await chain.getQuestion(questionId);
+    const qAfterRepeat = await chain.getQuestion(questionId);
+    assert.equal(qAfterRepeat?.buyer_count, qBeforeRepeat?.buyer_count, 'no second purchase on repeat access');
+    assert.equal(qAfterRepeat?.fee_pool, accessPrice.toString(), 'fee pool unchanged on repeat access');
     steps.push('repeat-access-same-payload');
 
     // 4. A non-purchasing account is denied (real has_bought=false).
@@ -633,34 +677,79 @@ async function main(): Promise<void> {
     assert.equal(vExp.body.error, 'challenge_expired');
     steps.push('expiry-denied');
 
-    // 8. Wrong service context (different network/contract) → account_mismatch.
+    // 8. Axis-isolated context mismatches (each overrides ONE axis; the others
+    // remain valid) — every one must fail closed with account_mismatch.
     // A challenge minted by THIS service is verified against a server whose
-    // configured network/contract differs → the bound context must fail closed.
-    const wrongConfig = baseConfig();
-    wrongConfig.networkId = 'wrong-net';
-    wrongConfig.contractId = 'wrong.contract.registrar';
-    const wrongServer = createPublicService(new Runtime(wrongConfig, chain, store, runner, { clock }));
-    await new Promise<void>((resolve) => wrongServer.listen(0, '127.0.0.1', resolve));
-    const wrongAddr = wrongServer.address();
-    assert.ok(wrongAddr && typeof wrongAddr === 'object');
-    const wrongBase = `http://127.0.0.1:${wrongAddr.port}`;
-    const cReal = await mintChallenge(buyer.accountId); // minted by the correct service
-    const sReal = await signChallenge(buyer.keyPair, buyer.accountId, cReal.message, cReal.nonce, cReal.recipient);
-    const wrongVerifyRes = await fetch(`${wrongBase}/auth/verify`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
-      body: JSON.stringify({
-        challenge_id: cReal.challenge_id,
-        account_id: buyer.accountId,
-        public_key: sReal.publicKey,
-        signature: sReal.signature,
-      }),
-    });
-    const wrongVerifyBody = (await wrongVerifyRes.json()) as { error: string };
-    assert.equal(wrongVerifyRes.status, 401);
-    assert.equal(wrongVerifyBody.error, 'account_mismatch');
-    await new Promise<void>((resolve) => wrongServer.close(() => resolve()));
-    steps.push('wrong-context-denied');
+    // single overridden axis differs → the bound context must fail closed.
+    {
+      const cContext = await mintChallenge(buyer.accountId);
+      const sContext = await signChallenge(buyer.keyPair, buyer.accountId, cContext.message, cContext.nonce, cContext.recipient);
+      const verifyBody = { challengeId: cContext.challenge_id, accountId: buyer.accountId, publicKey: sContext.publicKey, signature: sContext.signature };
+
+      // wrong network ONLY (contract/domain unchanged).
+      const wrongNetCfg = baseConfig();
+      wrongNetCfg.networkId = 'wrong-net';
+      const wrongNet = await serveWithConfig(wrongNetCfg);
+      const wrongNetRes = await verifyAt(wrongNet.base, verifyBody);
+      assert.equal(wrongNetRes.status, 401);
+      assert.equal(wrongNetRes.body.error, 'account_mismatch');
+      await wrongNet.close();
+      steps.push('wrong-network-only-denied');
+
+      // wrong contract ONLY (network/domain unchanged).
+      const wrongContractCfg = baseConfig();
+      wrongContractCfg.contractId = 'wrong.contract.registrar';
+      const wrongContract = await serveWithConfig(wrongContractCfg);
+      const wrongContractRes = await verifyAt(wrongContract.base, verifyBody);
+      assert.equal(wrongContractRes.status, 401);
+      assert.equal(wrongContractRes.body.error, 'account_mismatch');
+      await wrongContract.close();
+      steps.push('wrong-contract-only-denied');
+
+      // wrong service domain ONLY (network/contract unchanged).
+      const wrongDomainCfg = baseConfig();
+      wrongDomainCfg.access = { ...wrongDomainCfg.access, serviceDomain: 'evil-domain' };
+      const wrongDomain = await serveWithConfig(wrongDomainCfg);
+      const wrongDomainRes = await verifyAt(wrongDomain.base, verifyBody);
+      assert.equal(wrongDomainRes.status, 401);
+      assert.equal(wrongDomainRes.body.error, 'account_mismatch');
+      await wrongDomain.close();
+      steps.push('wrong-domain-only-denied');
+
+      // wrong claimed account ONLY (valid buyer key/signature, wrong account).
+      const wrongClaimRes = await verifyAt(base, {
+        challengeId: cContext.challenge_id,
+        accountId: nonBuyer.accountId,
+        publicKey: sContext.publicKey,
+        signature: sContext.signature,
+      });
+      assert.equal(wrongClaimRes.status, 401);
+      assert.equal(wrongClaimRes.body.error, 'account_mismatch');
+      steps.push('wrong-claimed-account-denied');
+
+      // another account's FullAccess key presented as the buyer (the key is a
+      // real FullAccess key, but for a different account).
+      const cOther = await mintChallenge(nonBuyer.accountId);
+      const sOther = await signChallenge(nonBuyer.keyPair, nonBuyer.accountId, cOther.message, cOther.nonce, cOther.recipient);
+      const otherKeyRes = await verifyAt(base, {
+        challengeId: cOther.challenge_id,
+        accountId: buyer.accountId,
+        publicKey: sOther.publicKey,
+        signature: sOther.signature,
+      });
+      assert.equal(otherKeyRes.status, 401);
+      assert.equal(otherKeyRes.body.error, 'account_mismatch');
+      steps.push('other-account-fullaccess-key-denied');
+
+      // wrong browser Origin ONLY (disallowed Origin → 403 at the HTTP layer).
+      const badOriginRes = await fetch(`${base}/auth/challenge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+        body: JSON.stringify({ account_id: buyer.accountId }),
+      });
+      assert.equal(badOriginRes.status, 403);
+      steps.push('wrong-origin-denied');
+    }
 
     // 9. Wrong recipient (signature over a different recipient) → invalid_signature.
     const cRec = await mintChallenge(buyer.accountId);
@@ -732,8 +821,40 @@ async function main(): Promise<void> {
     rmSync(emptyDbPath, { force: true });
     steps.push('missing-snapshot-unavailable');
 
+    // 13. Delivery interruption recovery: after the backing snapshot/context is
+    // restored (reopen the SAME durable DB file in a fresh service process),
+    // the buyer reuses their existing session + entitlement — HTTP 200 with the
+    // SAME frozen snapshot/aggregate, no second purchase, no automatic refund.
+    {
+      const recoveryStore = new Store(dbPath, 'sandbox', contractId);
+      const recoveryChain = new NearChainClient(baseConfig());
+      const recoveryRunner = new Runner(baseConfig(), recoveryChain, recoveryStore);
+      const recoveryRuntime = new Runtime(baseConfig(), recoveryChain, recoveryStore, recoveryRunner, { clock });
+      const recoveryServer = createPublicService(recoveryRuntime);
+      await new Promise<void>((resolve) => recoveryServer.listen(0, '127.0.0.1', resolve));
+      const recoveryAddr = recoveryServer.address();
+      assert.ok(recoveryAddr && typeof recoveryAddr === 'object');
+      const recoveryBase = `http://127.0.0.1:${recoveryAddr.port}`;
+
+      const recoveryRes = await fetch(`${recoveryBase}/forecast/${questionId}`, { headers: { cookie: v1.cookie } });
+      const recoveryBody = (await recoveryRes.json()) as Record<string, unknown>;
+      assert.equal(recoveryRes.status, 200, `recovery delivery failed: ${JSON.stringify(recoveryBody)}`);
+      assert.deepEqual(recoveryBody, d1.body, 'recovery must return the same frozen DTO');
+
+      // No second purchase, no automatic refund: finalized buyer_count unchanged
+      // and the buyer receipt is still un-refunded.
+      const qRecovered = await recoveryChain.getQuestion(questionId);
+      assert.equal(qRecovered?.buyer_count, qAfterRepeat?.buyer_count, 'no second purchase after recovery');
+      const receiptRecovered = await recoveryChain.getBuyerReceipt(questionId, buyer.accountId);
+      assert.equal(receiptRecovered?.refunded, false, 'no automatic refund after delivery interruption');
+
+      await new Promise<void>((resolve) => recoveryServer.close(() => resolve()));
+      recoveryStore.close();
+      steps.push('delivery-recovery-same-entitlement');
+    }
+
     // ------------------------------------------------------------------
-    // 13. TS → WASM reveal integration at the approved public seam (real
+    // 14. TS → WASM reveal integration at the approved public seam (real
     // contract). This is NOT a unit test of the commitment encoder: it drives
     // the actual `NearChainClient.reveal` (real ed25519 sign + FINAL tx) with
     // the ORIGINAL TypeScript commitment probability + salt, then asserts the
