@@ -31,6 +31,9 @@ export function BalancePanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [inFlight, setInFlight] = useState(false);
+  /** Claimable balance captured immediately before a withdraw, to detect the
+   * definitive claimable→pending/received transition after a void wallet call. */
+  const prevClaimable = useRef<bigint | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -50,11 +53,15 @@ export function BalancePanel({
     setBusy(null);
     setTxHash(null);
     setInFlight(false);
+    prevClaimable.current = null;
     void load();
   }, [load]);
 
-  // While a withdrawal is in flight, poll until no pending row remains (or the
-  // account changes). A pending row that reaches delivered/restored stops the loop.
+  // While a withdrawal is in flight, poll until a definitive canonical
+  // transition is observed. The in-flight flag is set BEFORE the wallet call
+  // (a browser wallet may return void, so the outcome is unknown until the
+  // chain is re-read), and only cleared by a definitive observation — never by
+  // an empty pending list seen before any poll.
   const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   useEffect(() => {
     if (!inFlight) return;
@@ -64,15 +71,25 @@ export function BalancePanel({
     return () => clearInterval(pollRef.current);
   }, [inFlight, load]);
 
+  // Reconciliation: stop only when the transfer reached a definitive state
+  // (delivered/restored) or the claimable balance actually decreased — never
+  // on a pre-observation empty list.
   useEffect(() => {
     if (!inFlight) return;
-    const terminal = pending.length === 0 || pending.every((w) => w.status !== 'pending');
-    if (terminal) setInFlight(false);
-  }, [pending, inFlight]);
+    const hasTerminalPending = pending.some((w) => w.status === 'delivered' || w.status === 'restored');
+    const claimableDropped = balance !== null && prevClaimable.current !== null && BigInt(balance.claimable) < prevClaimable.current;
+    if (hasTerminalPending || claimableDropped) {
+      setInFlight(false);
+    }
+  }, [pending, balance, inFlight]);
 
   const call = async (methodName: string, args: Record<string, unknown>, deposit: string) => {
     setBusy(methodName);
     setError(null);
+    if (balance) prevClaimable.current = BigInt(balance.claimable);
+    // A wallet call whose outcome is unknown (browser wallet returns void) is
+    // pending from the start; set the flag before the action.
+    setInFlight(true);
     try {
       const confirmed = await walletConnector().call({
         accountId,
@@ -86,10 +103,17 @@ export function BalancePanel({
       await load();
     } catch (err) {
       const msg = err instanceof ApiClientError ? `${err.code}: ${err.message}` : (err as Error).message;
-      if (msg.startsWith('transaction not finalized')) {
-        setInFlight(true);
-        setError('Withdrawal submitted — waiting for finalization and the transfer callback.');
+      // A user rejection is not a pending transfer: clear the flight flag and
+      // surface the rejection. A non-finalized/pending outcome keeps polling.
+      if (msg.startsWith('transaction not finalized') || msg.toLowerCase().includes('rejected')) {
+        if (msg.toLowerCase().includes('rejected')) {
+          setInFlight(false);
+          setError('Transaction rejected by the wallet.');
+        } else {
+          setError('Withdrawal submitted — waiting for finalization and the transfer callback.');
+        }
       } else {
+        setInFlight(false);
         setError(msg);
         onAuthRequired();
       }
