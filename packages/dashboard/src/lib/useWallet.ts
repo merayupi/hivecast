@@ -73,7 +73,7 @@ export function useWallet() {
     try {
       const config = state.config ?? (await loadConfig());
       if (!config) throw new Error('backend /config unavailable');
-      const accounts = await walletConnector().connect();
+      const accounts = await walletConnector().connect(config.contractId);
       const accountId = accounts[0]?.accountId ?? null;
       setState((s) => ({ ...s, status: 'connected', accounts, accountId, session: null }));
     } catch (err) {
