@@ -17,9 +17,10 @@ near-sdk = { version = "=5.5.0", features = ["unit-testing", "unstable"] }
 serde_json = "1"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
-# Official near-sandbox harness. `unstable` exposes compile_project for the
-# real WASM build inside tests (not a mock of chain success).
-near-workspaces = { version = "0.13", features = ["unstable"] }
+# Official near-sandbox harness. Tests deploy the already-built release WASM
+# artifact via `dev_deploy`, so the `unstable` (compile_project) feature is not
+# needed.
+near-workspaces = "0.13"
 # Independent commitment-encoding primitives for the sandbox test.
 borsh = { version = "1", features = ["derive"] }
 sha2 = "0.10"
