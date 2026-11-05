@@ -64,16 +64,39 @@ fn commitment_hash(
     hex::encode(Sha256::digest(&bytes))
 }
 
-/// Advance the sandbox clock to at least `target_ns` by fast-forwarding the
-/// required number of 1-second blocks (reading the current block timestamp).
+/// Advance the sandbox clock to at least `target_ns`.
+///
+/// The mapping between fast-forward block height and timestamp is not assumed
+/// to be 1 block = 1 second. Instead we observe the actual per-block timestamp
+/// delta, fast-forward the computed number of blocks, then step single blocks
+/// until the *observed* block timestamp passes `target_ns` — landing just past
+/// the target without grossly overshooting into a later phase.
 async fn advance_to(worker: &Worker<Sandbox>, target_ns: u64) -> anyhow::Result<()> {
-    let cur = worker.view_block().await?.timestamp();
-    if cur >= target_ns {
+    let t0 = worker.view_block().await?.timestamp();
+    if t0 >= target_ns {
         return Ok(());
     }
-    let delta = target_ns - cur;
-    let blocks = delta.div_ceil(NEAR_NS) + 2;
-    worker.fast_forward(blocks).await?;
+
+    // Observe the real per-block timestamp delta (>= 1 ns).
+    worker.fast_forward(1).await?;
+    let t1 = worker.view_block().await?.timestamp();
+    let per_block = t1.saturating_sub(t0).max(1);
+
+    // Fast-forward the bulk of the remaining distance.
+    let remaining = target_ns.saturating_sub(t1);
+    let bulk_blocks = remaining.div_ceil(per_block);
+    if bulk_blocks > 0 {
+        worker.fast_forward(bulk_blocks).await?;
+    }
+
+    // Fine-tune with single-block steps until the observed timestamp passes
+    // the target.
+    let mut guard = 0u32;
+    while worker.view_block().await?.timestamp() < target_ns {
+        worker.fast_forward(1).await?;
+        guard += 1;
+        anyhow::ensure!(guard < 10_000, "sandbox clock stuck before {target_ns}");
+    }
     Ok(())
 }
 
@@ -191,14 +214,17 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
         participants.push(acct);
     }
 
-    // Generous virtual schedule anchored to the current sandbox timestamp.
+    // Generous virtual schedule anchored to the OBSERVED sandbox timestamp
+    // AFTER participant setup, so 64 real RPC transactions each advancing the
+    // block clock cannot expire the commit/reveal windows. All phase
+    // transitions are reached via advance_to using observed timestamps.
     let t0 = worker.view_block().await?.timestamp();
-    let open_time = t0 + 200 * NEAR_NS;
-    let close_time = t0 + 600 * NEAR_NS;
-    let obs_start = t0 + 700 * NEAR_NS;
-    let obs_end = t0 + 720 * NEAR_NS;
-    let resolve_deadline = t0 + 1000 * NEAR_NS;
-    let reveal_window = 600 * NEAR_NS;
+    let open_time = t0 + 30 * NEAR_NS;
+    let close_time = t0 + 900 * NEAR_NS;
+    let obs_start = t0 + 960 * NEAR_NS;
+    let obs_end = t0 + 980 * NEAR_NS;
+    let resolve_deadline = t0 + 1300 * NEAR_NS;
+    let reveal_window = 900 * NEAR_NS;
     let access_price: u128 = 5;
     let min_stake: u128 = 1;
 
@@ -337,12 +363,12 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
         .into_result()?;
 
     let t0 = worker.view_block().await?.timestamp();
-    let open_time = t0 + 200 * NEAR_NS;
-    let close_time = t0 + 600 * NEAR_NS;
-    let obs_start = t0 + 700 * NEAR_NS;
-    let obs_end = t0 + 720 * NEAR_NS;
-    let resolve_deadline = t0 + 1000 * NEAR_NS;
-    let reveal_window = 600 * NEAR_NS;
+    let open_time = t0 + 30 * NEAR_NS;
+    let close_time = t0 + 900 * NEAR_NS;
+    let obs_start = t0 + 960 * NEAR_NS;
+    let obs_end = t0 + 980 * NEAR_NS;
+    let resolve_deadline = t0 + 1300 * NEAR_NS;
+    let reveal_window = 900 * NEAR_NS;
     // NEAR-scale amounts so recipient balance change is observable over gas.
     let min_stake: u128 = 10_000_000_000_000_000_000_000_000; // 10 NEAR
     let access_price: u128 = 5_000_000_000_000_000_000_000_000; // 5 NEAR
@@ -363,7 +389,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
         .max_gas()
         .transact()
         .await?;
-    assert!(res.is_success());
+    assert!(res.is_success(), "create_question failed: {res:?}");
     let question_id: u64 = res.json()?;
 
     advance_to(&worker, open_time).await?;
@@ -382,7 +408,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
         .max_gas()
         .transact()
         .await?;
-    assert!(res.is_success());
+    assert!(res.is_success(), "commit failed: {res:?}");
 
     advance_to(&worker, close_time + 2 * NEAR_NS).await?;
     let res = operator
@@ -391,7 +417,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
         .max_gas()
         .transact()
         .await?;
-    assert!(res.is_success());
+    assert!(res.is_success(), "publish_snapshot failed: {res:?}");
     let res = buyer
         .call(contract.id(), "buy_forecast")
         .args_json(serde_json::json!({ "question_id": question_id }))
@@ -399,7 +425,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
         .max_gas()
         .transact()
         .await?;
-    assert!(res.is_success());
+    assert!(res.is_success(), "buy_forecast failed: {res:?}");
 
     advance_to(&worker, obs_end + 2 * NEAR_NS).await?;
     let res = resolver
@@ -408,7 +434,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
         .max_gas()
         .transact()
         .await?;
-    assert!(res.is_success());
+    assert!(res.is_success(), "resolve failed: {res:?}");
 
     let res = participant
         .call(contract.id(), "reveal")
@@ -420,7 +446,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
         .max_gas()
         .transact()
         .await?;
-    assert!(res.is_success());
+    assert!(res.is_success(), "reveal failed: {res:?}");
 
     let resolved_at = worker.view_block().await?.timestamp();
     advance_to(&worker, resolved_at + reveal_window + 2 * NEAR_NS).await?;
@@ -430,7 +456,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
         .max_gas()
         .transact()
         .await?;
-    assert!(res.is_success());
+    assert!(res.is_success(), "settle failed: {res:?}");
 
     // Single participant: base = stake back (10), fee = entire pool (5) → 15 NEAR.
     let bal: serde_json::Value = contract
