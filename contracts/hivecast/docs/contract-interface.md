@@ -109,26 +109,37 @@ args: { "operator": "<account_id>" }
 
 Initializes the contract with the Operator account. Only callable once.
 
+> **Wire-format note.** near-sdk 5.5.0 deserializes each method's input as a
+> JSON **object keyed by parameter name** (the macro generates an `Input`
+> struct with named fields). A single struct parameter is therefore nested
+> under its parameter name, and every other method uses its named parameters
+> directly — never positional JSON arrays.
+
 ### `create_question` (Operator only)
 
 ```
 args: {
-  "text": string,             // 1..2048 bytes
-  "event_definition": string, // 1..2048 bytes
-  "source": string,           // 1..512 bytes
-  "resolver": string,         // account id
-  "open_time": string,        // ns
-  "close_time": string,       // ns
-  "observation_start": string,// ns
-  "observation_end": string,  // ns
-  "resolve_time": string|null,// ns; null defaults to observation_end
-  "resolve_deadline": string, // ns
-  "reveal_window": string,    // ns, > 0
-  "access_price": string,     // yoctoNEAR
-  "min_stake": string         // yoctoNEAR, > 0
+  "spec": {
+    "text": string,             // 1..2048 bytes
+    "event_definition": string, // 1..2048 bytes
+    "source": string,           // 1..512 bytes
+    "resolver": string,         // account id
+    "open_time": string,        // ns
+    "close_time": string,       // ns
+    "observation_start": string,// ns
+    "observation_end": string,  // ns
+    "resolve_time": string|null,// ns; null defaults to observation_end
+    "resolve_deadline": string, // ns
+    "reveal_window": string,    // ns, > 0
+    "access_price": string,     // yoctoNEAR
+    "min_stake": string         // yoctoNEAR, > 0
+  }
 }
 returns: question_id (u64, JSON number)
 ```
+
+The `QuestionSpec` fields are nested under the single parameter name `spec`
+(the Rust signature is `create_question(spec: QuestionSpec)`).
 
 Rules are immutable through the normal API after creation.
 

@@ -2,11 +2,18 @@
 //!
 //! These tests compile the actual contract WASM (`near_workspaces::compile_project`)
 //! and deploy it to a local `near-sandbox` node, then exercise the full public
-//! lifecycle — not the near-sdk mock VM and not a mocked chain success. They also
-//! measure real settlement gas for a 64-participant Round.
+//! lifecycle through real transactions — not the near-sdk mock VM and not a
+//! mocked chain success. They also measure real settlement gas for a
+//! 64-participant Round.
 //!
-//! Run with (Linux):
-//!   cargo test --manifest-path contracts/hivecast/Cargo.toml --test sandbox -- --nocapture
+//! Time handling: sandbox block timestamps advance with each transaction, so
+//! participant accounts are created *before* the commitment window, and all
+//! phase transitions are driven by `fast_forward` to computed targets using
+//! generous virtual deadlines (never real sleeps, never tight windows).
+//!
+//! Arg format: near-sdk 5.5.0 deserializes method arguments as a JSON object
+//! keyed by parameter name (see the `args_return_mut.snap` expansion), so all
+//! `args_json` calls here use named objects, exactly as the runner will.
 
 use borsh::BorshSerialize;
 use near_workspaces::network::Sandbox;
@@ -18,10 +25,9 @@ const NEAR_NS: u64 = 1_000_000_000; // 1 second in nanoseconds
 const MAX_SETTLE_GAS: u64 = 300_000_000_000_000; // 300 TGas
 
 // ---------------------------------------------------------------------------
-// Commitment preimage (independent re-implementation of the documented
-// byte layout in docs/contract-interface.md). This deliberately does NOT
-// import the contract's helper so the encoding is verified against the
-// on-chain reveal, mirroring what a TypeScript consumer would do.
+// Commitment preimage — independent re-implementation of the byte layout
+// documented in docs/contract-interface.md, so on-chain reveal matching is
+// verified against an encoding the contract does NOT supply to this test.
 // ---------------------------------------------------------------------------
 
 #[derive(BorshSerialize)]
@@ -59,19 +65,29 @@ fn commitment_hash(
     hex::encode(Sha256::digest(&bytes))
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+/// Advance the sandbox clock to at least `target_ns` by fast-forwarding the
+/// required number of 1-second blocks (reading the current block timestamp).
+async fn advance_to(worker: &Worker<Sandbox>, target_ns: u64) -> anyhow::Result<()> {
+    let cur = worker.view_block().await?.timestamp();
+    if cur >= target_ns {
+        return Ok(());
+    }
+    let delta = target_ns - cur;
+    let blocks = delta.div_ceil(NEAR_NS) + 2;
+    worker.fast_forward(blocks).await?;
+    Ok(())
+}
 
+/// Deploy the contract, fund it for storage sponsorship, and create the
+/// operator, resolver, and buyer subaccounts.
 async fn deploy() -> anyhow::Result<(Worker<Sandbox>, Contract, Account, Account, Account)> {
     let worker = near_workspaces::sandbox().await?;
     let wasm = near_workspaces::compile_project(env!("CARGO_MANIFEST_DIR")).await?;
     let contract = worker.dev_deploy(&wasm).await?;
 
-    // Fund the contract account generously so it can sponsor storage for a
-    // 64-participant Round and create funded subaccounts below.
-    let root_account = worker.root_account()?;
-    root_account
+    // Sponsor storage generously from the sandbox root account.
+    worker
+        .root_account()?
         .transfer_near(contract.id(), NearToken::from_near(1_000))
         .await?;
 
@@ -97,26 +113,13 @@ async fn deploy() -> anyhow::Result<(Worker<Sandbox>, Contract, Account, Account
 
     let res = contract
         .call("new")
-        .args_json((operator.id(),))
+        .args_json(serde_json::json!({ "operator": operator.id() }))
         .max_gas()
         .transact()
         .await?;
     assert!(res.is_success(), "init failed: {res:?}");
 
     Ok((worker, contract, operator, resolver, buyer))
-}
-
-/// Advance the sandbox clock past `target_ns` (reading the current block
-/// timestamp and fast-forwarding the required number of 1-second blocks).
-async fn advance_to(worker: &Worker<Sandbox>, target_ns: u64) -> anyhow::Result<()> {
-    let cur = worker.view_block().await?.timestamp();
-    if cur >= target_ns {
-        return Ok(());
-    }
-    let delta_ns = target_ns - cur;
-    let blocks = (delta_ns / NEAR_NS) + 2;
-    worker.fast_forward(blocks).await?;
-    Ok(())
 }
 
 fn spec_json(
@@ -130,64 +133,32 @@ fn spec_json(
     access_price: u128,
     min_stake: u128,
 ) -> serde_json::Value {
+    // create_question(spec: QuestionSpec) — the struct is nested under `spec`.
     serde_json::json!({
-        "text": "Will it rain?",
-        "event_definition": "precipitation_sum >= 1.0 mm",
-        "source": "open-meteo ECMWF IFS 9km",
-        "resolver": resolver_id,
-        "open_time": open_time.to_string(),
-        "close_time": close_time.to_string(),
-        "observation_start": obs_start.to_string(),
-        "observation_end": obs_end.to_string(),
-        "resolve_time": serde_json::Value::Null,
-        "resolve_deadline": resolve_deadline.to_string(),
-        "reveal_window": reveal_window.to_string(),
-        "access_price": access_price.to_string(),
-        "min_stake": min_stake.to_string(),
+        "spec": {
+            "text": "Will it rain?",
+            "event_definition": "precipitation_sum >= 1.0 mm",
+            "source": "open-meteo ECMWF IFS 9km",
+            "resolver": resolver_id,
+            "open_time": open_time.to_string(),
+            "close_time": close_time.to_string(),
+            "observation_start": obs_start.to_string(),
+            "observation_end": obs_end.to_string(),
+            "resolve_time": serde_json::Value::Null,
+            "resolve_deadline": resolve_deadline.to_string(),
+            "reveal_window": reveal_window.to_string(),
+            "access_price": access_price.to_string(),
+            "min_stake": min_stake.to_string(),
+        }
     })
 }
-
-// ---------------------------------------------------------------------------
-// Full lifecycle: 64 participants, exact conservation, measured gas.
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
     let (worker, contract, operator, resolver, buyer) = deploy().await?;
 
-    // Schedule relative to the current sandbox timestamp.
-    let now = worker.view_block().await?.timestamp();
-    let open_time = now + 5 * NEAR_NS;
-    let close_time = now + 120 * NEAR_NS;
-    let obs_start = now + 130 * NEAR_NS;
-    let obs_end = now + 140 * NEAR_NS;
-    let resolve_deadline = now + 200 * NEAR_NS;
-    let reveal_window = 30 * NEAR_NS;
-    let access_price: u128 = 5;
-    let min_stake: u128 = 1;
-
-    // 1. create_question (operator-only).
-    let res = operator
-        .call(contract.id(), "create_question")
-        .args_json((spec_json(
-            resolver.id().as_str(),
-            open_time,
-            close_time,
-            obs_start,
-            obs_end,
-            resolve_deadline,
-            reveal_window,
-            access_price,
-            min_stake,
-        ),))
-        .max_gas()
-        .transact()
-        .await?;
-    assert!(res.is_success(), "create_question failed: {res:?}");
-    let question_id: u64 = res.json()?;
-
-    // 2. commit 64 participants (stake = 1 yocto each).
-    advance_to(&worker, open_time).await?;
+    // Pre-create all 64 participant accounts BEFORE the commitment window so
+    // account-creation transactions cannot consume the open/close window.
     let mut participants: Vec<Account> = Vec::new();
     for i in 0..64u32 {
         let acct = contract
@@ -197,6 +168,43 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
             .transact()
             .await?
             .into_result()?;
+        participants.push(acct);
+    }
+
+    // Generous virtual schedule anchored to the current sandbox timestamp.
+    let t0 = worker.view_block().await?.timestamp();
+    let open_time = t0 + 200 * NEAR_NS;
+    let close_time = t0 + 600 * NEAR_NS;
+    let obs_start = t0 + 700 * NEAR_NS;
+    let obs_end = t0 + 720 * NEAR_NS;
+    let resolve_deadline = t0 + 1000 * NEAR_NS;
+    let reveal_window = 600 * NEAR_NS;
+    let access_price: u128 = 5;
+    let min_stake: u128 = 1;
+
+    // 1. create_question (operator-only).
+    let res = operator
+        .call(contract.id(), "create_question")
+        .args_json(spec_json(
+            resolver.id().as_str(),
+            open_time,
+            close_time,
+            obs_start,
+            obs_end,
+            resolve_deadline,
+            reveal_window,
+            access_price,
+            min_stake,
+        ))
+        .max_gas()
+        .transact()
+        .await?;
+    assert!(res.is_success(), "create_question failed: {res:?}");
+    let question_id: u64 = res.json()?;
+
+    // 2. commit all 64 participants (stake = min_stake each).
+    advance_to(&worker, open_time).await?;
+    for (i, acct) in participants.iter().enumerate() {
         let hash = commitment_hash(
             contract.id().as_str(),
             question_id,
@@ -207,20 +215,19 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
         );
         let res = acct
             .call(contract.id(), "commit")
-            .args_json((question_id, hash))
+            .args_json(serde_json::json!({ "question_id": question_id, "hash": hash }))
             .deposit(NearToken::from_yoctonear(min_stake))
             .max_gas()
             .transact()
             .await?;
         assert!(res.is_success(), "commit {i} failed: {res:?}");
-        participants.push(acct);
     }
 
     // 3. publish snapshot + buy (exactly access_price).
-    advance_to(&worker, close_time + 5 * NEAR_NS).await?;
+    advance_to(&worker, close_time + 2 * NEAR_NS).await?;
     let res = operator
         .call(contract.id(), "publish_snapshot")
-        .args_json((question_id, "snapshot-1".to_string()))
+        .args_json(serde_json::json!({ "question_id": question_id, "snapshot_id": "snapshot-1" }))
         .max_gas()
         .transact()
         .await?;
@@ -228,7 +235,7 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
 
     let res = buyer
         .call(contract.id(), "buy_forecast")
-        .args_json((question_id,))
+        .args_json(serde_json::json!({ "question_id": question_id }))
         .deposit(NearToken::from_yoctonear(access_price))
         .max_gas()
         .transact()
@@ -239,7 +246,7 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
     advance_to(&worker, obs_end + 2 * NEAR_NS).await?;
     let res = resolver
         .call(contract.id(), "resolve")
-        .args_json((question_id, true))
+        .args_json(serde_json::json!({ "question_id": question_id, "outcome": true }))
         .max_gas()
         .transact()
         .await?;
@@ -249,7 +256,11 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
     for acct in &participants {
         let res = acct
             .call(contract.id(), "reveal")
-            .args_json((question_id, 5000u16, "salt".to_string()))
+            .args_json(serde_json::json!({
+                "question_id": question_id,
+                "prob_bps": 5000,
+                "salt": "salt"
+            }))
             .max_gas()
             .transact()
             .await?;
@@ -257,10 +268,11 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
     }
 
     // 6. settle after reveal deadline, measuring real gas.
-    advance_to(&worker, obs_end + 2 * NEAR_NS + reveal_window + 5 * NEAR_NS).await?;
+    let resolved_at = worker.view_block().await?.timestamp();
+    advance_to(&worker, resolved_at + reveal_window + 2 * NEAR_NS).await?;
     let settle_res = operator
         .call(contract.id(), "settle")
-        .args_json((question_id,))
+        .args_json(serde_json::json!({ "question_id": question_id }))
         .max_gas()
         .transact()
         .await?;
@@ -272,12 +284,12 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
         "settlement gas {gas_burnt} exceeds {MAX_SETTLE_GAS}"
     );
 
-    // 7. Verify exact conservation: total claimable = W + F = 64 + 5 = 69.
+    // 7. Exact conservation: total claimable = W + F = 64 + 5 = 69.
     let mut total: u128 = 0;
     for acct in &participants {
         let bal: serde_json::Value = contract
             .call("get_balance")
-            .args_json((acct.id(),))
+            .args_json(serde_json::json!({ "account_id": acct.id() }))
             .view()
             .await?
             .json()?;
@@ -292,28 +304,32 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Async withdrawal: pending → delivered, and recipient balance increases.
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
     let (worker, contract, operator, resolver, buyer) = deploy().await?;
 
-    let now = worker.view_block().await?.timestamp();
-    let open_time = now + 5 * NEAR_NS;
-    let close_time = now + 120 * NEAR_NS;
-    let obs_start = now + 130 * NEAR_NS;
-    let obs_end = now + 140 * NEAR_NS;
-    let resolve_deadline = now + 200 * NEAR_NS;
-    let reveal_window = 30 * NEAR_NS;
+    let participant = contract
+        .as_account()
+        .create_subaccount("solo")
+        .initial_balance(NearToken::from_near(100))
+        .transact()
+        .await?
+        .into_result()?;
+
+    let t0 = worker.view_block().await?.timestamp();
+    let open_time = t0 + 200 * NEAR_NS;
+    let close_time = t0 + 600 * NEAR_NS;
+    let obs_start = t0 + 700 * NEAR_NS;
+    let obs_end = t0 + 720 * NEAR_NS;
+    let resolve_deadline = t0 + 1000 * NEAR_NS;
+    let reveal_window = 600 * NEAR_NS;
     // NEAR-scale amounts so recipient balance change is observable over gas.
     let min_stake: u128 = 10_000_000_000_000_000_000_000_000; // 10 NEAR
     let access_price: u128 = 5_000_000_000_000_000_000_000_000; // 5 NEAR
 
     let res = operator
         .call(contract.id(), "create_question")
-        .args_json((spec_json(
+        .args_json(spec_json(
             resolver.id().as_str(),
             open_time,
             close_time,
@@ -323,22 +339,14 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
             reveal_window,
             access_price,
             min_stake,
-        ),))
+        ))
         .max_gas()
         .transact()
         .await?;
     assert!(res.is_success());
     let question_id: u64 = res.json()?;
 
-    // Single participant stakes min_stake, forecasts 50%.
     advance_to(&worker, open_time).await?;
-    let participant = contract
-        .as_account()
-        .create_subaccount("solo")
-        .initial_balance(NearToken::from_near(100))
-        .transact()
-        .await?
-        .into_result()?;
     let hash = commitment_hash(
         contract.id().as_str(),
         question_id,
@@ -349,24 +357,24 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
     );
     let res = participant
         .call(contract.id(), "commit")
-        .args_json((question_id, hash))
+        .args_json(serde_json::json!({ "question_id": question_id, "hash": hash }))
         .deposit(NearToken::from_yoctonear(min_stake))
         .max_gas()
         .transact()
         .await?;
     assert!(res.is_success());
 
-    advance_to(&worker, close_time + 5 * NEAR_NS).await?;
+    advance_to(&worker, close_time + 2 * NEAR_NS).await?;
     let res = operator
         .call(contract.id(), "publish_snapshot")
-        .args_json((question_id, "snap".to_string()))
+        .args_json(serde_json::json!({ "question_id": question_id, "snapshot_id": "snap" }))
         .max_gas()
         .transact()
         .await?;
     assert!(res.is_success());
     let res = buyer
         .call(contract.id(), "buy_forecast")
-        .args_json((question_id,))
+        .args_json(serde_json::json!({ "question_id": question_id }))
         .deposit(NearToken::from_yoctonear(access_price))
         .max_gas()
         .transact()
@@ -376,7 +384,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
     advance_to(&worker, obs_end + 2 * NEAR_NS).await?;
     let res = resolver
         .call(contract.id(), "resolve")
-        .args_json((question_id, true))
+        .args_json(serde_json::json!({ "question_id": question_id, "outcome": true }))
         .max_gas()
         .transact()
         .await?;
@@ -384,16 +392,21 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
 
     let res = participant
         .call(contract.id(), "reveal")
-        .args_json((question_id, 5000u16, "salt".to_string()))
+        .args_json(serde_json::json!({
+            "question_id": question_id,
+            "prob_bps": 5000,
+            "salt": "salt"
+        }))
         .max_gas()
         .transact()
         .await?;
     assert!(res.is_success());
 
-    advance_to(&worker, obs_end + 2 * NEAR_NS + reveal_window + 5 * NEAR_NS).await?;
+    let resolved_at = worker.view_block().await?.timestamp();
+    advance_to(&worker, resolved_at + reveal_window + 2 * NEAR_NS).await?;
     let res = operator
         .call(contract.id(), "settle")
-        .args_json((question_id,))
+        .args_json(serde_json::json!({ "question_id": question_id }))
         .max_gas()
         .transact()
         .await?;
@@ -402,7 +415,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
     // Single participant: base = stake back (10), fee = entire pool (5) → 15 NEAR.
     let bal: serde_json::Value = contract
         .call("get_balance")
-        .args_json((participant.id(),))
+        .args_json(serde_json::json!({ "account_id": participant.id() }))
         .view()
         .await?
         .json()?;
@@ -410,10 +423,10 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
 
     let before = participant.view_account().await?.balance;
 
-    // withdraw 15 NEAR → promise transfer + private callback.
+    // withdraw(amount: U128) — decimal string.
     let res = participant
         .call(contract.id(), "withdraw")
-        .args_json((serde_json::json!("15000000000000000000000000"),))
+        .args_json(serde_json::json!({ "amount": "15000000000000000000000000" }))
         .max_gas()
         .transact()
         .await?;
@@ -422,7 +435,7 @@ async fn test_withdraw_delivers_funds() -> anyhow::Result<()> {
     // Callback ran: pending cleared, received = 15 NEAR.
     let bal: serde_json::Value = contract
         .call("get_balance")
-        .args_json((participant.id(),))
+        .args_json(serde_json::json!({ "account_id": participant.id() }))
         .view()
         .await?
         .json()?;

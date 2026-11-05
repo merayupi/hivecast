@@ -2,6 +2,15 @@ name: HiveCast Contract
 
 on:
   workflow_dispatch:
+  # Run automatically when the integration branch is pushed (workflow_dispatch
+  # alone requires the workflow to already exist on the default branch, which
+  # is not part of this repo's flow).
+  push:
+    branches:
+      - integration/hivecast-spec-1
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/hivecast-contract.yml'
 
 jobs:
   build-and-test:
