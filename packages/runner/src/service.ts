@@ -12,6 +12,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Runtime } from './runtime.js';
 import { AccessError, ACCESS_HTTP_STATUS } from './access/index.js';
+import { ChainUnavailableError } from './chain/index.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -174,6 +175,19 @@ export function createPublicService(runtime: Runtime): Server {
         return sendJson(res, 200, economics, runtime);
       }
 
+      // ---- Public finalized transaction receipt (read-only, keyless) -------
+
+      if (req.method === 'GET' && parts[0] === 'tx' && parts[1]) {
+        const txHash = parts[1];
+        const accountId = url.searchParams.get('account_id') ?? '';
+        if (!accountId) {
+          return sendJson(res, 400, { error: 'missing_account_id' }, runtime);
+        }
+        const view = await runtime.getTxFinalStatus(txHash, accountId);
+        if (!view) return sendJson(res, 404, { error: 'not_found' }, runtime);
+        return sendJson(res, 200, view, runtime);
+      }
+
       // ---- Forecast Access authentication ---------------------------------
 
       if (req.method === 'POST' && url.pathname === '/auth/challenge') {
@@ -295,6 +309,12 @@ export function createPublicService(runtime: Runtime): Server {
     } catch (err) {
       if (err instanceof AccessError) {
         return sendJson(res, ACCESS_HTTP_STATUS[err.code], { error: err.code, message: err.message }, runtime);
+      }
+      // Transient chain/RPC availability (e.g. the public RPC endpoint is down
+      // or rate-limited) must surface as 503, not a 500 "internal error", and
+      // never be conflated with a definitive "not found".
+      if (err instanceof ChainUnavailableError) {
+        return sendJson(res, 503, { error: 'chain_unavailable', message: (err as Error).message }, runtime);
       }
       return sendJson(res, 500, { error: 'internal_error', message: (err as Error).message }, runtime);
     }

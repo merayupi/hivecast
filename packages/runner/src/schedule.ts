@@ -21,7 +21,7 @@ export const WIB_OFFSET_MS = 7 * MS_PER_HOUR; // UTC+7, no DST
 
 export const PRICE_INSTRUMENT = 'NEARUSDT';
 export const PRICE_INTERVAL = '1h';
-export const WEATHER_MODEL = 'ecmwf_ifs'; // ECMWF IFS 9 km (~0.4°); ecmwf_ifs04 is a 0.04° cut, NOT 9 km
+export const WEATHER_MODEL = 'ecmwf_ifs'; // ECMWF IFS 9 km — the pinned resolution model
 export const KUDUS_LAT = '-6.8049';
 export const KUDUS_LON = '110.8397';
 export const WEATHER_TIMEZONE = 'Asia/Jakarta';
