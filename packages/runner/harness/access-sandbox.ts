@@ -53,7 +53,7 @@ const WASM_PATH = process.env.HIVECAST_WASM ?? 'contracts/hivecast/target/wasm32
 const SANDBOX_BIN =
   process.env.NEAR_SANDBOX_BIN_PATH ?? `${process.env.HOME}/.near/near-sandbox-2.14.0-rc.5/near-sandbox`;
 
-// Deterministic sandbox TEST fixture key (near-workspaces `registrar` account).
+// Deterministic sandbox TEST fixture key (near-workspaces default genesis key).
 // Published test-only key, never a user credential; it funds the sandbox so
 // ephemeral accounts can be created.
 const REGISTRAR_ACCOUNT = 'registrar';
@@ -78,21 +78,47 @@ function freePort(): number {
 }
 
 async function waitForRpc(rpcUrl: string, timeoutMs = 60_000): Promise<void> {
+  // neard exposes a plain HTTP `GET /status` endpoint; poll it exactly as
+  // near-workspaces does (not a JSON-RPC POST `status`).
   const deadline = Date.now() + timeoutMs;
+  let lastError = '';
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(rpcUrl, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 'health', method: 'status', params: [] }),
-      });
+      const res = await fetch(`${rpcUrl}/status`, { method: 'GET' });
       if (res.ok) return;
-    } catch {
-      // not ready yet
+      lastError = `HTTP ${res.status}`;
+    } catch (err) {
+      lastError = (err as Error).message;
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`sandbox RPC did not become ready within ${timeoutMs}ms`);
+  throw new Error(`sandbox RPC did not become ready within ${timeoutMs}ms (last: ${lastError})`);
+}
+
+const SAND_ACCOUNT = 'sandbox'; // near-workspaces default funded genesis account
+const CLONE_ACCOUNT = 'clone'; // near-workspaces account-for-cloning
+const GENESIS_BALANCE = 10_000_000_000_000_000_000_000_000_000n; // 10,000 NEAR
+
+/** Append a funded FullAccess Account + AccessKey record pair for `accountId`. */
+function appendGenesisAccount(records: unknown[], accountId: string): void {
+  records.push({
+    Account: {
+      account_id: accountId,
+      account: {
+        amount: GENESIS_BALANCE.toString(),
+        locked: '0',
+        code_hash: '11111111111111111111111111111111',
+        storage_usage: 182,
+      },
+    },
+  });
+  records.push({
+    AccessKey: {
+      account_id: accountId,
+      public_key: REGISTRAR_PUBLIC_KEY,
+      access_key: { nonce: 0, permission: 'FullAccess' },
+    },
+  });
 }
 
 async function startSandbox(): Promise<SandboxProc> {
@@ -102,46 +128,74 @@ async function startSandbox(): Promise<SandboxProc> {
   const netPort = freePort();
   const rpcUrl = `http://127.0.0.1:${rpcPort}`;
 
-  execFileSync(SANDBOX_BIN, ['--home', homeDir, 'init', '--fast'], { stdio: 'ignore' });
+  // init (--fast) — capture output so a failed init is diagnosable.
+  const initOut = execFileSync(SANDBOX_BIN, ['--home', homeDir, 'init', '--fast'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  });
+  if (initOut.trim()) {
+    process.stdout.write(`[sandbox init] ${initOut.trim().slice(0, 2000)}\n`);
+  }
 
-  // Patch genesis.json exactly like near-workspaces: add a funded `registrar`
-  // FullAccess account so ephemeral accounts can be created.
+  // Patch config.json exactly like near-workspaces 0.24 (set_sandbox_configs):
+  // a 1GB JSON-RPC payload cap and a generous open-file limit.
+  const configPath = path.join(homeDir, 'config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  const rpc = (config.rpc ??= {}) as Record<string, unknown>;
+  const limits = (rpc.limits_config ??= {}) as Record<string, unknown>;
+  limits.json_payload_max_size = 1024 * 1024 * 1024;
+  const store = (config.store ??= {}) as Record<string, unknown>;
+  store.max_open_files = 3000;
+  writeFileSync(configPath, JSON.stringify(config));
+
+  // Patch genesis.json exactly like near-workspaces 0.24 (overwrite_genesis):
+  // add `sandbox` + `clone` + `registrar` funded FullAccess accounts.
   const genesisPath = path.join(homeDir, 'genesis.json');
   const genesis = JSON.parse(readFileSync(genesisPath, 'utf8')) as { total_supply: string; records: unknown[] };
-  const registrarAmount = 10_000_000_000_000_000_000_000_000_000n;
-  genesis.total_supply = (BigInt(genesis.total_supply) + registrarAmount).toString();
-  genesis.records.push({
-    Account: {
-      account_id: REGISTRAR_ACCOUNT,
-      account: {
-        amount: registrarAmount.toString(),
-        locked: '0',
-        code_hash: '11111111111111111111111111111111',
-        storage_usage: 182,
-      },
-    },
-  });
-  genesis.records.push({
-    AccessKey: {
-      account_id: REGISTRAR_ACCOUNT,
-      public_key: REGISTRAR_PUBLIC_KEY,
-      access_key: { nonce: 0, permission: 'FullAccess' },
-    },
-  });
+  const addedAccounts = [SAND_ACCOUNT, CLONE_ACCOUNT, REGISTRAR_ACCOUNT];
+  let totalSupply = BigInt(genesis.total_supply);
+  for (const accountId of addedAccounts) {
+    totalSupply += GENESIS_BALANCE;
+    appendGenesisAccount(genesis.records, accountId);
+  }
+  genesis.total_supply = totalSupply.toString();
   writeFileSync(genesisPath, JSON.stringify(genesis));
 
-  writeFileSync(
-    path.join(homeDir, 'registrar.json'),
-    JSON.stringify({ account_id: REGISTRAR_ACCOUNT, public_key: REGISTRAR_PUBLIC_KEY, private_key: REGISTRAR_PRIVATE_KEY }),
-  );
+  // Write the operator-readable key files (near-workspaces convention).
+  const keyJson = (accountId: string) =>
+    JSON.stringify({ account_id: accountId, public_key: REGISTRAR_PUBLIC_KEY, private_key: REGISTRAR_PRIVATE_KEY });
+  writeFileSync(path.join(homeDir, 'sandbox.json'), keyJson(SAND_ACCOUNT));
+  writeFileSync(path.join(homeDir, 'registrar.json'), keyJson(REGISTRAR_ACCOUNT));
 
+  // Capture child stdout/stderr + exit status so a startup failure is
+  // diagnosable (never silently swallowed).
   const child = spawn(
     SANDBOX_BIN,
     ['--home', homeDir, 'run', '--rpc-addr', `127.0.0.1:${rpcPort}`, '--network-addr', `127.0.0.1:${netPort}`],
-    { stdio: 'ignore' },
+    { stdio: ['ignore', 'pipe', 'pipe'] },
   );
+  let stdoutBuf = '';
+  let stderrBuf = '';
+  let exitCode: number | null = null;
+  child.stdout?.on('data', (d: Buffer) => {
+    stdoutBuf += d.toString();
+  });
+  child.stderr?.on('data', (d: Buffer) => {
+    stderrBuf += d.toString();
+  });
+  child.on('exit', (code) => {
+    exitCode = code;
+  });
 
-  await waitForRpc(rpcUrl);
+  try {
+    await waitForRpc(rpcUrl);
+  } catch (err) {
+    // Surface every diagnostic before failing — no silent readiness failure.
+    const reason = `\n--- sandbox stdout (tail) ---\n${stdoutBuf.slice(-4000)}\n` +
+      `--- sandbox stderr (tail) ---\n${stderrBuf.slice(-8000)}\n` +
+      `--- exit status: ${exitCode === null ? 'still running' : exitCode} ---`;
+    throw new Error(`sandbox startup failed: ${(err as Error).message}${reason}`);
+  }
 
   return {
     rpcUrl,
