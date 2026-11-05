@@ -19,7 +19,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { getStrategy, supportsDomain } from '@hivecast/core';
 import type { AgentId, Domain, StrategyContext, StrategyInputs } from '@hivecast/core';
 import { commitmentHash, generateSalt } from './commitment.js';
-import type { ChainClient } from './chain/types.js';
+import type { ChainClient, TxFinalStatusView } from './chain/types.js';
+import { ChainUnavailableError } from './chain/index.js';
 import type { RunnerConfig } from './config.js';
 import {
   nsToMs,
@@ -254,6 +255,31 @@ export class Runner {
   // Journal helper (durable intent → broadcast → reconcile)
   // -------------------------------------------------------------------------
 
+  /** Reconcile a persisted signed tx's OLD canonical receipt against the chain.
+   * Returns the definitive decision on whether the original already landed,
+   * failed, is still pending, or is unknown — BEFORE any fresh re-sign. */
+  private async checkOldReceipt(
+    txHash: string,
+    signer: string,
+  ): Promise<'final-success' | 'final-failure' | 'pending' | 'unknown' | 'unavailable'> {
+    let view: TxFinalStatusView | null;
+    try {
+      view = await this.chain.viewTxFinalStatus(txHash, signer);
+    } catch (err) {
+      // RPC/chain unavailable: preserve unknown, do NOT re-sign.
+      if (err instanceof ChainUnavailableError) return 'unavailable';
+      // Any other definitive not-found → unknown.
+      return 'unknown';
+    }
+    if (view === null) return 'unknown'; // not found / not yet queryable
+    if (view.final_execution_status === 'FINAL') {
+      return view.success_value ? 'final-success' : 'final-failure';
+    }
+    // Known but not FINAL (Started/NotStarted/EXECUTED_OPTIMISTIC/…) → still in
+    // flight; preserve the exact signed bytes and wait, never re-sign.
+    return 'pending';
+  }
+
   private async runOnce(
     dedupKey: string,
     kind: JournalKind,
@@ -280,11 +306,43 @@ export class Runner {
     // the SAME signed transaction (same nonce/signature), never re-sign.
     const signed = this.store.getSignedTx(dedupKey);
     if (signed) {
+      // Business postcondition landed already (fast path).
       if (await verify()) {
         this.store.markConfirmed(dedupKey, signed.txHash);
         this.store.deleteSignedTx(dedupKey);
         return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
       }
+
+      // Reconcile the OLD canonical receipt BEFORE any rebroadcast/re-sign.
+      const signerId = action().signer;
+      const oldReceipt = await this.checkOldReceipt(signed.txHash, signerId);
+      if (oldReceipt === 'final-success') {
+        // The original tx actually landed (lost response): confirm, no re-sign.
+        this.store.markConfirmed(dedupKey, signed.txHash);
+        this.store.deleteSignedTx(dedupKey);
+        return { kind, questionId, accountId, sent: false, reason: 'reconciled', error: null };
+      }
+      if (oldReceipt === 'pending') {
+        // Known but not FINAL: preserve the exact signed bytes, wait (no new nonce).
+        this.store.markSubmitted(dedupKey, signed.txHash);
+        return { kind, questionId, accountId, sent: false, reason: 'old-receipt-pending', error: null };
+      }
+      if (oldReceipt === 'unavailable') {
+        // RPC unavailable: preserve unknown, do NOT re-sign.
+        this.store.markSubmitted(dedupKey, signed.txHash);
+        return { kind, questionId, accountId, sent: false, reason: 'rebroadcast-uncertain', error: 'chain unavailable' };
+      }
+      // 'unknown' or 'final-failure': the old tx did NOT definitively land.
+      // Only a DEFINITIVE pre-inclusion rejection (stale nonce / expired
+      // blockHash) or a FINAL failure permits a FRESH re-sign of the SAME
+      // intent. A mere timeout/unknown keeps the same signed tx and re-broadcasts.
+      if (oldReceipt === 'final-failure') {
+        // Definitive failure: safe to re-prepare fresh for the same intent.
+        return this.prepareFreshAndBroadcast(dedupKey, kind, questionId, accountId, action);
+      }
+      // 'unknown': rebroadcast the SAME signed tx (NEAR dedupes by hash) to
+      // learn the definitive status; if it comes back nonceStale/expired, the
+      // caller path below handles the fresh re-prepare.
       const outcome = await this.chain.broadcastCall(signed.signedBytesBase64);
       if (outcome.status === 'success') {
         this.store.markConfirmed(dedupKey, outcome.txHash ?? signed.txHash);
@@ -292,11 +350,8 @@ export class Runner {
         return { kind, questionId, accountId, sent: true, reason: 'rebroadcast-sent', error: null };
       }
       if (outcome.nonceStale || outcome.txExpired) {
-        // Definitive pre-inclusion rejection (stale nonce OR expired blockHash):
-        // the tx was NOT included and will never be accepted on rebroadcast.
-        // Reconcile the postcondition first (the original intent may already
-        // have landed via a lost response), then evict the nonce cache and
-        // re-prepare a FRESH signed tx for the SAME intent.
+        // DEFINITIVE pre-inclusion rejection: the old tx was NOT included and
+        // will never be accepted. Reconcile postcondition then re-prepare fresh.
         if (await verify()) {
           this.store.markConfirmed(dedupKey, signed.txHash);
           this.store.deleteSignedTx(dedupKey);
@@ -305,8 +360,8 @@ export class Runner {
         return this.prepareFreshAndBroadcast(dedupKey, kind, questionId, accountId, action);
       }
       if (outcome.status === 'failure') {
-        // Definitively rejected/failed: it did not apply, so a fresh attempt is
-        // safe after this is cleared.
+        // Included-but-failed (e.g. contract assert): did not apply; safe to
+        // retry the same intent fresh.
         this.store.markFailed(dedupKey, outcome.error ?? 'unknown error');
         this.store.deleteSignedTx(dedupKey);
         return { kind, questionId, accountId, sent: false, reason: 'failed', error: outcome.error };
@@ -838,6 +893,29 @@ export class Runner {
     // Reconcile a previously prepared signed tx before any new signing.
     const signed = this.store.getSignedTx(dedupKey);
     if (signed) {
+      // Reconcile the OLD canonical receipt BEFORE any rebroadcast/re-sign.
+      const oldReceipt = await this.checkOldReceipt(signed.txHash, this.config.operatorId);
+      if (oldReceipt === 'final-success') {
+        // The original create_question landed (lost response): recover + confirm.
+        const landed = await this.listAllChainQuestions().then((qs) => qs.find((q) => this.matchesSpec(q, params)));
+        if (landed) {
+          this.store.markConfirmed(dedupKey, signed.txHash);
+          this.store.deleteSignedTx(dedupKey);
+          this.store.saveQuestion(this.toLocalQuestion(landed.question_id, params, participants), params.targetKey);
+          return { questionId: landed.question_id, alreadyExists: true, error: null };
+        }
+        // receipt says success but business view not yet visible: reconcile next tick.
+        return { questionId: null, alreadyExists: false, error: 'create_question receipt final but business view pending' };
+      }
+      if (oldReceipt === 'pending' || oldReceipt === 'unavailable') {
+        // Preserve exact signed bytes, wait (no fresh nonce / no re-sign).
+        return { questionId: null, alreadyExists: false, error: 'create_question old receipt pending/unavailable; will reconcile' };
+      }
+      if (oldReceipt === 'final-failure') {
+        // Definitive failure: safe to re-prepare fresh for the same spec.
+        return this.reconcileOrRecreate(dedupKey, params, participants);
+      }
+      // 'unknown': rebroadcast the SAME signed tx to learn the definitive status.
       const outcome = await this.chain.broadcastCall(signed.signedBytesBase64);
       if (outcome.status === 'success' && typeof outcome.result === 'number') {
         const questionId = outcome.result as number;
@@ -848,8 +926,7 @@ export class Runner {
         return { questionId, alreadyExists: false, error: null };
       }
       if (outcome.nonceStale || outcome.txExpired) {
-        // Definitive pre-inclusion rejection: reconcile the on-chain postcondition
-        // first, then re-prepare a FRESH signed create_question (same spec).
+        // DEFINITIVE pre-inclusion rejection: reconcile spec match then re-prepare.
         return this.reconcileOrRecreate(dedupKey, params, participants);
       }
       if (outcome.status === 'failure') {
