@@ -1,0 +1,88 @@
+{
+  "bundleVersion": 1,
+  "generatedAt": "2026-11-05T00:00:00Z",
+  "evalPeriod": {
+    "start": "2026-08-01",
+    "end": "2026-09-29",
+    "priceRounds": 1440,
+    "weatherRounds": 60,
+    "priceWarmup": { "days": 7, "candles": 168 },
+    "weatherWarmup": { "days": 365 }
+  },
+  "seed": 42,
+  "initialCapitalNear": "100",
+  "stakeFloor": "0.10",
+  "minStakeNear": "0.1",
+  "queryFeeNear": "0.01",
+  "files": {
+    "price.json": {
+      "sha256": "1b61650df0653d9109931c28c39a1ea4b2b595763bbea22b4ca9d2f91922ced9",
+      "bytes": 618704,
+      "description": "Binance spot NEARUSDT 1h klines: 168 warm-up (2026-07-25..2026-07-31) + 1440 eval (2026-08-01..2026-09-29)."
+    },
+    "weather.json": {
+      "sha256": "58d8ef6ec3104897c0d8fed012d945b55572ab8ab86449c040ee98e0cce9cf46",
+      "bytes": 18269,
+      "description": "Open-Meteo ECMWF IFS daily precipitation_sum (425 days: 365 warm-up + 60 eval) plus 60 Single-Runs forecast inputs."
+    }
+  },
+  "sources": [
+    {
+      "id": "binance-nearusdt-1h",
+      "domain": "price",
+      "kind": "outcome-and-input",
+      "instrument": "NEARUSDT",
+      "interval": "1h",
+      "source": "Binance Spot REST API /api/v3/klines",
+      "url": "https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/market#klines",
+      "attribution": "Binance",
+      "license": "Binance Terms of Use (live REST API, proprietary, no redistribution license in the free tier). Non-commercial educational use only.",
+      "licenseUrl": "https://www.binance.com/en/terms",
+      "availability": "proven",
+      "availableAt": "closeTime (candle period end); a candle is immutable once finalized. Exact publication lag is not recorded and is immaterial: strategies use candles with closeTime strictly before cutoff.",
+      "note": "YES means close > open compared exactly (decimal strings), per spec. NEARUSDT is a Tether-stablecoin pair, not fiat USD."
+    },
+    {
+      "id": "open-meteo-ifs-archive",
+      "domain": "weather",
+      "kind": "outcome",
+      "instrument": "precipitation_sum (mm)",
+      "model": "ecmwf_ifs",
+      "grid": "9 km (O1280); cell nearest lat=-6.8049 lon=110.8397",
+      "source": "Open-Meteo Historical Weather API (Archive)",
+      "url": "https://open-meteo.com/en/docs/historical-weather-api",
+      "attribution": "Open-Meteo (Weather data by Open-Meteo.com), ECMWF IFS",
+      "license": "CC BY 4.0 (data); Open-Meteo free tier non-commercial only",
+      "licenseUrl": "https://open-meteo.com/en/licence",
+      "availability": "proven",
+      "availableAt": "fetched 2026-11-05 (post-evaluation). Resolution truth = pinned model/grid + captured response, not a station observation.",
+      "note": "Outcome YES means daily precipitation_sum >= 1.0 mm over the Asia/Jakarta (WIB) day. IFS 9 km analysis is gridded model output, not an official station reading."
+    },
+    {
+      "id": "open-meteo-ifs-climatology-history",
+      "domain": "weather",
+      "kind": "strategy-input (climatology)",
+      "model": "ecmwf_ifs",
+      "source": "Open-Meteo Historical Weather API (Archive)",
+      "availability": "retrospective",
+      "availableAt": null,
+      "note": "Reanalysis for a past day can be revised after the fact. The value fetched today for a past date is not proven to equal the value available at the replay cutoff, so climatology history is a labelled retrospective benchmark input, not strict point-in-time evidence."
+    },
+    {
+      "id": "open-meteo-ifs-single-runs",
+      "domain": "weather",
+      "kind": "strategy-input (meteo)",
+      "model": "ecmwf_ifs",
+      "source": "Open-Meteo Single Runs API",
+      "url": "https://open-meteo.com/en/docs/single-runs-api",
+      "attribution": "Open-Meteo (Weather data by Open-Meteo.com), ECMWF IFS",
+      "license": "CC BY 4.0 (data); Open-Meteo free tier non-commercial only",
+      "licenseUrl": "https://open-meteo.com/en/licence",
+      "availability": "inference",
+      "availableAt": null,
+      "run": "IFS run initialised 00:00 UTC on D-1 (the day before each target WIB day), hourly precipitation summed over the target WIB day.",
+      "note": "Run initialisation time precedes cutoff; exact publication time is not recorded per-run by Open-Meteo. Open-Meteo documents global-model latency of typically 4-6 hours, so a 00:00 UTC run is expected available ~04:00-06:00 UTC, before the 16:55 UTC cutoff. This availability is an INFERENCE, not strict proof; the meteo input is therefore labelled a retrospective/inference benchmark input, never the target day's realized precipitation."
+    }
+  ],
+  "licensingSummary": "Binance REST data is proprietary (no redistribution in the free tier); Open-Meteo data is CC BY 4.0 with attribution, free tier non-commercial only. This is a non-commercial educational hackathon demo; no commercial data licence is implied."
+}
