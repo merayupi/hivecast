@@ -161,9 +161,10 @@ async fn test_full_lifecycle_64_participants_with_gas() -> anyhow::Result<()> {
     // account-creation transactions cannot consume the open/close window.
     let mut participants: Vec<Account> = Vec::new();
     for i in 0..64u32 {
+        let name = format!("p{i}");
         let acct = contract
             .as_account()
-            .create_subaccount(format!("p{i}"))
+            .create_subaccount(&name)
             .initial_balance(NearToken::from_near(10))
             .transact()
             .await?
