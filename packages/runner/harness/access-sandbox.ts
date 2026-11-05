@@ -23,7 +23,7 @@
  *
  * Usage (Linux; wasm built + near-sandbox binary present):
  *   HIVECAST_WASM=contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm \
- *   NEAR_SANDBOX_BIN_PATH=$HOME/.near/near-sandbox-2.0.0/near-sandbox \
+ *   NEAR_SANDBOX_BIN_PATH=$HOME/.near/near-sandbox-2.14.0-rc.5/near-sandbox \
  *   npm run sandbox:access --workspace @hivecast/runner
  */
 
@@ -46,7 +46,8 @@ import { Store } from '../src/store.js';
 import type { AccessClock } from '../src/access/index.js';
 
 const WASM_PATH = process.env.HIVECAST_WASM ?? 'contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm';
-const SANDBOX_BIN = process.env.NEAR_SANDBOX_BIN_PATH ?? `${process.env.HOME}/.near/near-sandbox-2.0.0/near-sandbox`;
+const SANDBOX_BIN =
+  process.env.NEAR_SANDBOX_BIN_PATH ?? `${process.env.HOME}/.near/near-sandbox-2.14.0-rc.5/near-sandbox`;
 
 // Deterministic sandbox TEST fixture key (near-workspaces `registrar` account).
 // Published test-only key, never a user credential; it funds the sandbox so
