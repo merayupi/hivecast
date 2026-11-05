@@ -283,6 +283,9 @@ class SandboxRunnerChain implements ChainClient {
   private readonly inner: NearChainClient;
   private currentNs: bigint;
   private dropNextBroadcasts = 0;
+  private staleNonceArmed = false;
+  private externalOperatorSigner: Account | null = null;
+  private externalOperatorId = '';
 
   constructor(inner: NearChainClient, initialNs: bigint) {
     this.inner = inner;
@@ -296,6 +299,18 @@ class SandboxRunnerChain implements ChainClient {
 
   dropBroadcastResponses(n: number): void {
     this.dropNextBroadcasts = n;
+  }
+
+  /**
+   * Arm a REAL stale-nonce trigger: on the next broadcast, a SEPARATE external
+   * signer (its own Account/nonceManager) consumes the operator's current
+   * on-chain nonce with a benign native Transfer BEFORE the daemon's prepared
+   * signed tx is broadcast, so the daemon's cached nonce is stale.
+   */
+  armStaleNonce(operatorId: string, externalAccount: Account): void {
+    this.externalOperatorId = operatorId;
+    this.externalOperatorSigner = externalAccount;
+    this.staleNonceArmed = true;
   }
 
   nowNs(): bigint {
@@ -363,6 +378,16 @@ class SandboxRunnerChain implements ChainClient {
   }
 
   async broadcastCall(signedBytesBase64: string): Promise<CallOutcome> {
+    // If armed, first consume the operator's current on-chain nonce via the
+    // SEPARATE external signer (a real native Transfer), making the daemon's
+    // cached nonce stale before its prepared tx is broadcast.
+    if (this.staleNonceArmed && this.externalOperatorSigner) {
+      this.staleNonceArmed = false;
+      await this.externalOperatorSigner.transfer({
+        receiverId: this.externalOperatorId,
+        amount: 1n,
+      });
+    }
     // Broadcast for REAL (the node accepts the tx), then optionally drop the
     // RESPONSE to simulate a transport failure after acceptance. The prepared
     // signed tx was persisted before this call, so the runner reconciles
@@ -715,9 +740,59 @@ async function main(): Promise<void> {
     }
     process.stdout.write('recovery: withdraw-reconcile OK (exact single payout, no double)\n');
 
+    // 5. Stale-nonce recovery: a REAL concurrent external signer (a second
+    // Account for the operator, its own nonceManager) consumes the operator's
+    // on-chain nonce before the daemon broadcasts a prepared create_question.
+    // The daemon's cached nonce is then stale → InvalidNonceError → nonceStale
+    // → runOnce reconciles + evicts the nonce cache + re-prepares a FRESH
+    // signed tx for the SAME intent. Assert exactly ONE on-chain question (no
+    // duplicate) with the matching spec, and a confirmed journal.
+    {
+      // A separate external signer for the operator (independent nonce cache).
+      const externalOperator = new Account(operator.accountId, provider, operator.keyPair.toString());
+      chain.armStaleNonce(operator.accountId, externalOperator);
+
+      const q2Spec = {
+        domain: 'price' as const,
+        text: 'Second recovery fixture',
+        eventDefinition: 'Binance spot NEARUSDT 1h candle: YES means close > open',
+        sourceJson: JSON.stringify({ instrument: 'NEARUSDT', interval: '1h' }),
+        sourceLabel: 'Binance NEARUSDT 1h',
+        targetKey: 'price:recovery-fixture-2',
+        openTimeNs: openTime + 1n,
+        closeTimeNs: closeTime + 1n,
+        observationStartNs: obsStart + 1n,
+        observationEndNs: obsEnd + 1n,
+        resolveTimeNs: obsEnd + 1n,
+        resolveDeadlineNs: resolveDeadline + 1n,
+        revealWindowNs: revealWindow,
+      };
+      const created2 = await runner.createQuestion(q2Spec);
+      assert.ok(
+        typeof created2.questionId === 'number',
+        `stale-nonce create_question should recover to a question id, got ${JSON.stringify(created2)}`,
+      );
+      const q2Id = created2.questionId!;
+
+      // Exactly one on-chain question with the matching spec (no duplicate).
+      const allQuestions = await innerChain.listQuestions(0, 100);
+      const matches = allQuestions.filter(
+        (q) => q.source === q2Spec.sourceJson && q.observation_start === q2Spec.observationStartNs.toString(),
+      );
+      assert.equal(matches.length, 1, `expected exactly one stale-nonce create_question, got ${matches.length}`);
+      assert.equal(matches[0]!.question_id, q2Id);
+
+      // The journal intent is confirmed with a canonical tx hash.
+      const journal = store.getJournal(`create_question:${q2Spec.targetKey}`);
+      assert.ok(journal, 'create_question journal missing');
+      assert.equal(journal.status, 'confirmed');
+      assert.ok(journal.txHash, 'confirmed create_question missing tx hash');
+      process.stdout.write('recovery: stale-nonce external-signer reconcile OK (single fresh tx, same intent)\n');
+    }
+
     store.close();
     rmSync(dbPath, { force: true });
-    process.stdout.write('recovery-sandbox OK: commit/snapshot/withdraw restart reconciliation proven at the public seam\n');
+    process.stdout.write('recovery-sandbox OK: commit/snapshot/withdraw + stale-nonce restart reconciliation proven at the public seam\n');
   } finally {
     sb.stop();
   }
