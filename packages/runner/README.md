@@ -125,6 +125,21 @@ the on-chain `snapshot_id`. Repeat access returns the same payload with no new
 charge. A lost private snapshot or RPC failure returns `snapshot_unavailable`
 (503) — never fabricated data, never an automatic delivery refund.
 
+### Access proof surface
+
+- **`test/access.test.ts`** — boundary tests for the auth/delivery semantics
+  (replay, expiry, wrong context, function-call key, concurrency,
+  honest-unavailable) at the HTTP seam. They use a controllable chain adapter
+  and genuine near-api-js Ed25519 NEP-413 signatures; they do **not** claim a
+  real contract purchase or a real FullAccess key on a live chain.
+- **`harness/access-sandbox.ts`** (`npm run sandbox:access`, Linux only) — the
+  real purchase proof. It deploys the actual contract WASM to a real
+  `near-sandbox` node and drives `create_question → commit → publish_snapshot →
+  buy_forecast → NEP-413 login → frozen snapshot delivery` with ephemeral keys.
+- **`harness/auth-smoke.ts`** (`npm run smoke:auth`) — real-testnet NEP-413
+  FullAccess login only; it does **not** purchase anything and reports the
+  honest `not_purchased` result (no fabricated purchase proof).
+
 ## SQLite schema (`src/store.ts`, `node:sqlite`)
 
 Private database (never committed). The database is **bound to one
@@ -169,6 +184,7 @@ npm run cli --workspace @hivecast/runner -- snapshot <questionId>   # private ag
 npm run service --workspace @hivecast/runner                          # public HTTP
 npm run harness:testnet --workspace @hivecast/runner -- price         # real-chain lifecycle
 npm run smoke:auth --workspace @hivecast/runner                       # real-testnet NEP-413 login (no purchase)
+npm run sandbox:access --workspace @hivecast/runner                   # Linux: real near-sandbox purchase + delivery proof
 ```
 
 ## Exact source semantics (`src/source.ts`)
