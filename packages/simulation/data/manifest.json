@@ -1,13 +1,18 @@
 {
-  "bundleVersion": 1,
-  "generatedAt": "2026-11-05T00:00:00Z",
+  "bundleVersion": 2,
+  "generatedAt": "2026-11-05T06:37:59.555Z",
   "evalPeriod": {
     "start": "2026-08-01",
     "end": "2026-09-29",
     "priceRounds": 1440,
     "weatherRounds": 60,
-    "priceWarmup": { "days": 7, "candles": 168 },
-    "weatherWarmup": { "days": 365 }
+    "priceWarmup": {
+      "days": 7,
+      "candles": 168
+    },
+    "weatherWarmup": {
+      "days": 365
+    }
   },
   "seed": 42,
   "initialCapitalNear": "100",
@@ -16,9 +21,9 @@
   "queryFeeNear": "0.01",
   "files": {
     "price.json": {
-      "sha256": "1b61650df0653d9109931c28c39a1ea4b2b595763bbea22b4ca9d2f91922ced9",
-      "bytes": 618704,
-      "description": "Binance spot NEARUSDT 1h klines: 168 warm-up (2026-07-25..2026-07-31) + 1440 eval (2026-08-01..2026-09-29)."
+      "sha256": "c696265ba866b79adb40f817d39a0909750859bfb695c2545de82374b9771a00",
+      "bytes": 618723,
+      "description": "Binance Vision NEARUSDT 1h klines: 168 warm-up (2026-07-25..2026-07-31) + 1440 eval (2026-08-01..2026-09-29)."
     },
     "weather.json": {
       "sha256": "58d8ef6ec3104897c0d8fed012d945b55572ab8ab86449c040ee98e0cce9cf46",
@@ -26,6 +31,38 @@
       "description": "Open-Meteo ECMWF IFS daily precipitation_sum (425 days: 365 warm-up + 60 eval) plus 60 Single-Runs forecast inputs."
     }
   },
+  "sourceArchives": [
+    {
+      "month": "2026-07",
+      "url": "https://data.binance.vision/data/spot/monthly/klines/NEARUSDT/1h/NEARUSDT-1h-2026-07.zip",
+      "publishedSha256": "87ef0140c041a0c28086e123f97aa5c0377a1d6c6b763b237b48015d49676e99",
+      "fetchedSha256": "87ef0140c041a0c28086e123f97aa5c0377a1d6c6b763b237b48015d49676e99",
+      "bytes": 33012,
+      "lastModified": "Mon, 03 Aug 2026 10:19:11 GMT",
+      "terms": "CC BY-NC-SA 4.0 (non-commercial only)",
+      "termsUrl": "https://github.com/binance/binance-public-data/blob/master/TERMS_AND_CONDITIONS.md"
+    },
+    {
+      "month": "2026-08",
+      "url": "https://data.binance.vision/data/spot/monthly/klines/NEARUSDT/1h/NEARUSDT-1h-2026-08.zip",
+      "publishedSha256": "e075ca23757b483545a31a10cc1ee534b19c8eea5dbed3015a1d96b5353e5cd3",
+      "fetchedSha256": "e075ca23757b483545a31a10cc1ee534b19c8eea5dbed3015a1d96b5353e5cd3",
+      "bytes": 32861,
+      "lastModified": "Mon, 07 Sep 2026 10:45:38 GMT",
+      "terms": "CC BY-NC-SA 4.0 (non-commercial only)",
+      "termsUrl": "https://github.com/binance/binance-public-data/blob/master/TERMS_AND_CONDITIONS.md"
+    },
+    {
+      "month": "2026-09",
+      "url": "https://data.binance.vision/data/spot/monthly/klines/NEARUSDT/1h/NEARUSDT-1h-2026-09.zip",
+      "publishedSha256": "3b1f30f3e270061a72ca7ff419a5cb59c53be3b62cf372e11f09e041cf84785d",
+      "fetchedSha256": "3b1f30f3e270061a72ca7ff419a5cb59c53be3b62cf372e11f09e041cf84785d",
+      "bytes": 34433,
+      "lastModified": "Mon, 05 Oct 2026 10:57:21 GMT",
+      "terms": "CC BY-NC-SA 4.0 (non-commercial only)",
+      "termsUrl": "https://github.com/binance/binance-public-data/blob/master/TERMS_AND_CONDITIONS.md"
+    }
+  ],
   "sources": [
     {
       "id": "binance-nearusdt-1h",
@@ -33,14 +70,32 @@
       "kind": "outcome-and-input",
       "instrument": "NEARUSDT",
       "interval": "1h",
-      "source": "Binance Spot REST API /api/v3/klines",
-      "url": "https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/market#klines",
+      "source": "Binance Vision monthly kline archives",
+      "url": "https://data.binance.vision/data/spot/monthly/klines/NEARUSDT/1h/",
       "attribution": "Binance",
-      "license": "Binance Terms of Use (live REST API, proprietary, no redistribution license in the free tier). Non-commercial educational use only.",
-      "licenseUrl": "https://www.binance.com/en/terms",
-      "availability": "proven",
-      "availableAt": "closeTime (candle period end); a candle is immutable once finalized. Exact publication lag is not recorded and is immaterial: strategies use candles with closeTime strictly before cutoff.",
-      "note": "YES means close > open compared exactly (decimal strings), per spec. NEARUSDT is a Tether-stablecoin pair, not fiat USD."
+      "license": "CC BY-NC-SA 4.0 (non-commercial only); attribution required. Educational non-commercial use only.",
+      "licenseUrl": "https://github.com/binance/binance-public-data/blob/master/TERMS_AND_CONDITIONS.md",
+      "availability": "retrospective",
+      "availableAt": null,
+      "evidence": {
+        "archiveLastModified": [
+          {
+            "month": "2026-07",
+            "lastModified": "Mon, 03 Aug 2026 10:19:11 GMT"
+          },
+          {
+            "month": "2026-08",
+            "lastModified": "Mon, 07 Sep 2026 10:45:38 GMT"
+          },
+          {
+            "month": "2026-09",
+            "lastModified": "Mon, 05 Oct 2026 10:57:21 GMT"
+          }
+        ],
+        "archiveSha256Verified": true,
+        "fetchedAt": "2026-11-05T06:37:59.555Z"
+      },
+      "note": "The monthly archive bundle is published after each month ends (Last-Modified ~1 week later) and fetched post-evaluation, so no per-candle publication/availability timestamp is recorded. Completed Binance kline values are immutable (Binance does not revise finalized candles), which prevents future-data leakage into the close>open outcome, but strict point-in-time availability of each candle at its cutoff is NOT proven; the whole price experiment is a labelled retrospective benchmark."
     },
     {
       "id": "open-meteo-ifs-archive",
@@ -54,9 +109,9 @@
       "attribution": "Open-Meteo (Weather data by Open-Meteo.com), ECMWF IFS",
       "license": "CC BY 4.0 (data); Open-Meteo free tier non-commercial only",
       "licenseUrl": "https://open-meteo.com/en/licence",
-      "availability": "proven",
-      "availableAt": "fetched 2026-11-05 (post-evaluation). Resolution truth = pinned model/grid + captured response, not a station observation.",
-      "note": "Outcome YES means daily precipitation_sum >= 1.0 mm over the Asia/Jakarta (WIB) day. IFS 9 km analysis is gridded model output, not an official station reading."
+      "availability": "retrospective",
+      "availableAt": null,
+      "note": "Resolution truth is the pinned model/grid + captured response, not a station observation. IFS analysis can be revised after the fact, so a value fetched today for a past date is not proven to equal the value available at resolution time; the weather Outcome is a labelled retrospective benchmark."
     },
     {
       "id": "open-meteo-ifs-climatology-history",
@@ -66,7 +121,7 @@
       "source": "Open-Meteo Historical Weather API (Archive)",
       "availability": "retrospective",
       "availableAt": null,
-      "note": "Reanalysis for a past day can be revised after the fact. The value fetched today for a past date is not proven to equal the value available at the replay cutoff, so climatology history is a labelled retrospective benchmark input, not strict point-in-time evidence."
+      "note": "Reanalysis for a past day can be revised after the fact; today’s value for a past date is not proven to equal the value available at the replay cutoff."
     },
     {
       "id": "open-meteo-ifs-single-runs",
@@ -81,8 +136,8 @@
       "availability": "inference",
       "availableAt": null,
       "run": "IFS run initialised 00:00 UTC on D-1 (the day before each target WIB day), hourly precipitation summed over the target WIB day.",
-      "note": "Run initialisation time precedes cutoff; exact publication time is not recorded per-run by Open-Meteo. Open-Meteo documents global-model latency of typically 4-6 hours, so a 00:00 UTC run is expected available ~04:00-06:00 UTC, before the 16:55 UTC cutoff. This availability is an INFERENCE, not strict proof; the meteo input is therefore labelled a retrospective/inference benchmark input, never the target day's realized precipitation."
+      "note": "Run initialisation time precedes cutoff, but Open-Meteo does not record a per-run publication timestamp. Documented global-model latency is typically 4-6 hours (00 UTC run available ~04-06 UTC, before the 16:55 UTC cutoff), but that is an INFERENCE, not strict proof. Never the target day’s realized precipitation."
     }
   ],
-  "licensingSummary": "Binance REST data is proprietary (no redistribution in the free tier); Open-Meteo data is CC BY 4.0 with attribution, free tier non-commercial only. This is a non-commercial educational hackathon demo; no commercial data licence is implied."
+  "licensingSummary": "Binance Vision archive data is CC BY-NC-SA 4.0 (non-commercial, attribution required); Open-Meteo data is CC BY 4.0 with attribution, free tier non-commercial only. This is a non-commercial educational hackathon demo; no commercial data licence is implied."
 }

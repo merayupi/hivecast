@@ -1,0 +1,4 @@
+# Preserve byte-exact bundle data: checksums in manifest.json are computed over
+# LF bytes. Force LF for JSON so Windows checkouts do not rewrite CRLF and break
+# SHA-256 verification.
+*.json text eol=lf

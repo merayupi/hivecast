@@ -1,7 +1,7 @@
 {
   "symbol": "NEARUSDT",
   "interval": "1h",
-  "source": "Binance Spot REST /api/v3/klines",
+  "source": "Binance Vision monthly kline archives (NEARUSDT 1h)",
   "evalStart": "2026-08-01",
   "evalEnd": "2026-09-29",
   "warmupStart": "2026-07-25",
