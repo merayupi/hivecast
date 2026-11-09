@@ -3,19 +3,8 @@ import { usePolling } from '../lib/hooks';
 import { questionDomain } from '../lib/format';
 import type { LlmRationale, QuestionView } from '../lib/types';
 
-const PAGE = 100;
-const MAX_PAGES = 20;
-
-/** Every Question on chain, paged (the Arena needs the newest, not the first 100). */
-export async function fetchAllQuestions(): Promise<QuestionView[]> {
-  const out: QuestionView[] = [];
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const { questions } = await api.questions(page * PAGE, PAGE);
-    out.push(...questions);
-    if (questions.length < PAGE) break;
-  }
-  return out;
-}
+/** Every Question on chain (the Arena needs the newest, not the first 100). */
+export const fetchAllQuestions = (): Promise<QuestionView[]> => api.allQuestions();
 
 /**
  * Latest revealed Herald rationale: walk the newest resolved/settled price

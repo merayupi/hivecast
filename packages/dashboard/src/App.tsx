@@ -120,8 +120,8 @@ function LedgerApp({ wallet, focusId }: { wallet: ReturnType<typeof useWallet>; 
   const [mode, setMode] = useState<Mode>('live');
   const [domain, setDomain] = useState<'all' | 'price' | 'weather'>('all');
   const [selectedId, setSelectedId] = useState<number | null>(focusId);
-  const { data: questions } = usePolling(() => api.questions(0, 100), 15_000, []);
-  // A Round handed over from the Arena may be newer than the first page.
+  const { data: questions } = usePolling(() => api.allQuestions(), 15_000, []);
+  // Direct read of the selected Round keeps it fresh between list polls.
   const { data: focused } = usePolling(
     () => (selectedId === null ? Promise.resolve(null) : api.question(selectedId)),
     15_000,
@@ -129,7 +129,7 @@ function LedgerApp({ wallet, focusId }: { wallet: ReturnType<typeof useWallet>; 
   );
 
   const selected: QuestionView | null =
-    questions?.questions.find((q) => q.question_id === selectedId) ??
+    questions?.find((q) => q.question_id === selectedId) ??
     (focused && focused.question_id === selectedId ? focused : null);
 
   return (

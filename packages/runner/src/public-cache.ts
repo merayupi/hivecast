@@ -79,17 +79,22 @@ export class PublicChainCache implements PublicReadSource {
     const cursor = this.store.getPublicCursor();
     // 'complete' requires BOTH that the fetch cursor has caught up to the last
     // observed on-chain question count AND that the live (non-terminal) set was
-    // freshly re-walked on the current request. A stale TTL-cached live set is
-    // "as of" a past refresh, so it must report 'partial', never 'complete'.
+    // re-walked on chain within LIVE_READ_TTL_MS. The bound is the same one the
+    // live cache serves under (and tighter than the 30 s balance/native caches
+    // the same reports use), so concurrent callers -- the dashboard polls the
+    // leaderboard and economics together -- no longer turn every second request
+    // into 'partial'. A live set older than the TTL, or never walked, is partial.
+    const liveFresh = this.lastLiveWalkAt !== null && Date.now() - this.lastLiveWalkAt < LIVE_READ_TTL_MS;
     return {
       totalQuestions: this.lastObservedTotal,
       fetchedQuestions: cursor,
-      complete: cursor >= this.lastObservedTotal && this.lastFreshLiveWalk,
+      complete: cursor >= this.lastObservedTotal && liveFresh,
     };
   }
 
   private lastObservedTotal = 0;
-  private lastFreshLiveWalk = false;
+  /** When the live (non-terminal) set was last re-read from chain (ms), or null. */
+  private lastLiveWalkAt: number | null = null;
 
   private async refreshCursor(): Promise<void> {
     const state = await this.chain.getContractState();
@@ -158,6 +163,7 @@ export class PublicChainCache implements PublicReadSource {
       }
     }
     this.liveQuestionsCache = { at: now, rows: live };
+    this.lastLiveWalkAt = now;
     return { rows: live, fresh: true };
   }
 
@@ -166,8 +172,7 @@ export class PublicChainCache implements PublicReadSource {
     const terminal = this.store
       .listPublicTerminalRounds()
       .map((r) => (JSON.parse(r.dataJson) as TerminalData).question);
-    const { rows: live, fresh } = await this.readLiveQuestions();
-    this.lastFreshLiveWalk = fresh;
+    const { rows: live } = await this.readLiveQuestions();
     return [...terminal, ...live].sort((a, b) => a.question_id - b.question_id);
   }
 

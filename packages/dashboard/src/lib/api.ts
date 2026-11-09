@@ -23,7 +23,7 @@ import type {
   TrustDisclosure,
 } from './types';
 
-const BASE = import.meta.env.VITE_API_BASE ?? '/api';
+const BASE = import.meta.env?.VITE_API_BASE ?? '/api'; // env is undefined under node:test
 
 export class ApiClientError extends Error {
   readonly status: number;
@@ -65,6 +65,16 @@ export const api = {
   disclosure: () => get<TrustDisclosure>('/disclosure'),
   agents: async () => (await get<{ agents: AgentRosterEntry[] }>('/agents')).agents,
   questions: (fromIndex = 0, limit = 50) => get<{ questions: QuestionView[] }>(`/questions?from_index=${fromIndex}&limit=${limit}`),
+  /** Every Question on chain, paged (100 per request, at most 2,000). */
+  allQuestions: async (): Promise<QuestionView[]> => {
+    const out: QuestionView[] = [];
+    for (let page = 0; page < 20; page += 1) {
+      const { questions } = await get<{ questions: QuestionView[] }>(`/questions?from_index=${page * 100}&limit=100`);
+      out.push(...questions);
+      if (questions.length < 100) break;
+    }
+    return out;
+  },
   question: (id: number) => get<QuestionView>(`/questions/${id}`),
   comparison: (id: number) => get<QuestionComparison>(`/questions/${id}/comparison`),
   leaderboard: () => get<GlobalLeaderboard>('/analytics/leaderboard'),

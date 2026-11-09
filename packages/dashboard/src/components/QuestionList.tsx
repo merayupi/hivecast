@@ -14,10 +14,11 @@ export function QuestionList({
   onSelect: (id: number) => void;
   selectedId: number | null;
 }) {
-  const { data, error, loading } = usePolling(() => api.questions(0, 100), 15_000, []);
+  // All pages, newest first below: a fixed first page stops showing new Rounds after ~100.
+  const { data, error, loading } = usePolling(() => api.allQuestions(), 15_000, []);
   const now = useClock(); // re-render countdowns each second
 
-  const questions = (data?.questions ?? [])
+  const questions = (data ?? [])
     .filter((q) => domain === 'all' || questionDomain(q.source) === domain)
     .slice()
     .sort((a, b) => b.question_id - a.question_id);
