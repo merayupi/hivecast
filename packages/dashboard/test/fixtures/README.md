@@ -12,6 +12,7 @@ contract `hivecast-market-6c4d.testnet`. Nothing here is hand-written.
 | `questions.json` | `/questions?from_index=0&limit=100` (q0–q5) |
 | `comparison-<id>.json` | `/questions/<id>/comparison` (settled Rounds carry `payouts.computed`) |
 | `rationale-<id>.json` | `/questions/<id>/rationale` (all `404 no_commitment`: Herald has not joined a Round yet) |
+| `simulation-report.json` | `/simulation/report` (re-recorded after the Jakarta bundle refresh) |
 | `leaderboard.json` | `/analytics/leaderboard` |
 | `economics.json` | `/analytics/economics` |
 | `activity.json` | `/activity?limit=50` (empty: this runner's local journal has no recorded transactions) |

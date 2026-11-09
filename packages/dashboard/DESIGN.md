@@ -2,6 +2,63 @@
 
 <!-- impeccable:design-schema 1 -->
 
+## Two surfaces
+
+The dashboard has two visual worlds under one pixel HUD (wordmark HIVECAST,
+`TESTNET · <contract>` chip, tabs, wallet): the **Hive Arena** (ARENA and
+the SIMULATION race) and the **ruled ledger** (LEDGER and TRUST, plus the
+replay's charts and table under the race). The ledger keeps its own light
+paper theme and is shown as a sheet inside the Arena's night frame, so every
+tab shares one surface. Everything below "World" describes the ledger and is
+unchanged.
+
+## The Hive Arena
+
+- **World:** a cozy 16-bit night market inside a giant honeycomb, the Hive.
+  Original art only (`art/`, Aseprite).
+- **Palette** (CSS `--hive-*` tokens and `palette.ts`): night `#14101f`, deep
+  `#241b3a`, violet `#3b2d5c`, dusk `#5a4a7a`, honey `#f2b134`, amber
+  `#e07a1f`, wax `#fff1c1`, cream `#f7e9d0`, yes-green `#5bd16b`, ash
+  `#8a8399`, alert-red `#e24b4b`, sky `#5fb3e8`, rain `#3a6fb0`, leaf
+  `#2f8f5b`, ink `#0b0a10`, white `#ffffff`. Green only for YES and gains,
+  red only for losses and out-of-capital. Sprites use at most 7 of these each.
+- **Type:** Pixelify Sans (Google Fonts) for titles and HUD only; numbers,
+  hashes and accounts in ui-monospace; paragraphs in the system sans.
+- **Stage:** one `<canvas>` at a logical 320×180, drawn at a whole number of
+  *device* pixels per logical pixel (no resampling on 125%/150% displays),
+  smoothing off, positions on whole pixels. requestAnimationFrame, paused while
+  the tab is hidden. `prefers-reduced-motion` shows the final frame of each
+  story: static poses, no particles. The canvas is `aria-hidden`; every fact on
+  it is repeated in the DOM (caption, *On stage* table, Round card).
+- **Layout:** stage + right-rail Round card (question, domain/city, phase,
+  countdown in the event's own time zone, participants, total stake, Buy when
+  the snapshot is on sale, which opens that Round in LEDGER) and Schedule
+  board; below, Hall of Fame, Herald's Scroll (the LLM agent's revealed
+  rationale and headlines) and the On NEAR feed. Under 1100px everything
+  stacks; at 390px there is no page-level horizontal scroll (tables scroll in
+  their own frame).
+- **Cast:** nine characters, one fixed pedestal each on the background's arc
+  (roster order). Participants stand on a lit pedestal; agents sitting a Round
+  out stand dimmed on their own dim pedestal, with the reason in the DOM.
+- **Scene state machine** (`scene.ts`, pure, unit-tested): OPEN (agents seal
+  envelopes into the Lockbox, SEALED n/m), CLOSED (freezing → the Oracle Stone
+  pulses while the forecast is on sale → observing: an empty candle frame for
+  price, the city's real local day/night for weather → awaiting the resolver),
+  RESOLVED (Outcome icon drops, revealed probabilities land as darts on a
+  0–100% track, non-revealers wait, then show NO REVEAL · score 0), SETTLED
+  (win/lose poses, coins from losers to winners sized by the real per-agent
+  payout), CANCELLED (refund tokens float back). Each story plays once per view;
+  Replay replays it. Missing data is an explicit NO DATA YET state.
+- **Season Replay** (SIMULATION): lanes race on bankroll (log scale) from the
+  replay series; play/pause, 1×/4×/16×, scrub; the leader wears a crown, an
+  agent below 10× the minimum stake collapses into its bankrupt ghost. Always
+  labelled "OFFLINE REPLAY · not live chain activity".
+- **Sprites:** `public/sprites/<id>.png/.json` (Aseprite JSON array, untrimmed
+  24×24 frames, tags idle/seal/reveal/win/lose/bankrupt), `props.png/.json`,
+  `arena-bg.png`. A missing or invalid file falls back to a generated
+  placeholder (a rounded square in the agent's colour with its initial), so the
+  Arena works with placeholders only.
+
 ## World
 
 A ruled ledger: iron-black ink and one rubric vermilion on unbleached bone. Every panel, table, and detent is drawn with 1px hairline rules; the surface reads as a printed working record, not a marketing page. The single signature move is the **Round phase ladder** — a horizontal detent track where scheduled → opening → cutoff → snapshot sale → observation → resolution → reveal deadlines are ruled marks, and "now" sits as a vermilion detent; a deadline is a mark on a track, never a countdown tile.
@@ -47,4 +104,4 @@ One authored moment, not scattered effects: hover is a 120ms ink-fill on buttons
 
 ## Assets
 
-No raster/illustration assets; all graphics are CSS hairlines and Lucide-free text/chips (the wordmark is a ruled "HC" square). No image generation was available for this surface.
+The ledger views use no raster assets: all graphics are CSS hairlines and text/chips. The Arena's raster art lives in `public/sprites` and is drawn only on the Arena canvas.

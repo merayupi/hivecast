@@ -1,6 +1,7 @@
 {
   "bundleVersion": 2,
-  "generatedAt": "2026-11-05T06:37:59.555Z",
+  "generatedAt": "2026-11-09T13:14:46.384Z",
+  "weatherLocation": "Jakarta, Indonesia",
   "evalPeriod": {
     "start": "2026-08-01",
     "end": "2026-09-29",
@@ -26,8 +27,8 @@
       "description": "Binance Vision NEARUSDT 1h klines: 168 warm-up (2026-07-25..2026-07-31) + 1440 eval (2026-08-01..2026-09-29)."
     },
     "weather.json": {
-      "sha256": "58d8ef6ec3104897c0d8fed012d945b55572ab8ab86449c040ee98e0cce9cf46",
-      "bytes": 18269,
+      "sha256": "98af7cdb4e9aa83f0179bb26c05d0a88ab1fa4988d6567d684e378f14d7c5443",
+      "bytes": 18655,
       "description": "Open-Meteo ECMWF IFS daily precipitation_sum (425 days: 365 warm-up + 60 eval) plus 60 Single-Runs forecast inputs."
     }
   },
@@ -93,7 +94,7 @@
           }
         ],
         "archiveSha256Verified": true,
-        "fetchedAt": "2026-11-05T06:37:59.555Z"
+        "fetchedAt": "2026-11-09T13:14:46.384Z"
       },
       "note": "The monthly archive bundle is published after each month ends (Last-Modified ~1 week later) and fetched post-evaluation, so no per-candle publication/availability timestamp is recorded. Completed Binance kline values are immutable (Binance does not revise finalized candles), which prevents future-data leakage into the close>open outcome, but strict point-in-time availability of each candle at its cutoff is NOT proven; the whole price experiment is a labelled retrospective benchmark."
     },
@@ -103,7 +104,7 @@
       "kind": "outcome",
       "instrument": "precipitation_sum (mm)",
       "model": "ecmwf_ifs",
-      "grid": "9 km (O1280); cell nearest lat=-6.8049 lon=110.8397",
+      "grid": "9 km (O1280); cell nearest lat=-6.2088 lon=106.8456 (Jakarta, Indonesia)",
       "source": "Open-Meteo Historical Weather API (Archive)",
       "url": "https://open-meteo.com/en/docs/historical-weather-api",
       "attribution": "Open-Meteo (Weather data by Open-Meteo.com), ECMWF IFS",
