@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Shell } from './components/Shell';
 import { HeroLine, TryItPanel } from './components/Intro';
 import { RationalePanel } from './components/Rationale';
@@ -13,18 +13,97 @@ import type { WalletState } from './lib/useWallet';
 import { usePolling } from './lib/hooks';
 import { api } from './lib/api';
 import type { QuestionView } from './lib/types';
+import { ArenaView } from './arena/ArenaView';
+import { Hud, TABS, type Tab } from './arena/Hud';
+import './arena/arena.css';
 
 type Mode = 'live' | 'simulation' | 'agents' | 'leaderboard' | 'disclosure';
 
+function tabFromHash(): Tab {
+  const h = window.location.hash.replace('#', '');
+  return (TABS.find((t) => t.id === h)?.id ?? 'arena') as Tab;
+}
+
+/** App shell: pixel HUD + ARENA (default) / LEDGER / SIMULATION / TRUST. */
 export function App() {
-  const { state, connect, disconnect, login } = useWallet();
+  const wallet = useWallet();
+  const { state, connect, disconnect, login } = wallet;
+  const [tab, setTabState] = useState<Tab>(tabFromHash);
+  const [ledgerFocus, setLedgerFocus] = useState<number | null>(null);
+
+  useEffect(() => {
+    const onHash = () => setTabState(tabFromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  const setTab = (t: Tab) => {
+    setTabState(t);
+    const url = new URL(window.location.href);
+    url.hash = t === 'arena' ? '' : t;
+    if (t !== 'arena') url.searchParams.delete('round');
+    window.history.replaceState(null, '', url);
+  };
+
+  const walletProps = {
+    accountId: state.accountId,
+    authenticated: state.status === 'authenticated',
+    connecting: state.status === 'connecting',
+    onConnect: () => void connect(),
+    onDisconnect: () => void disconnect(),
+    onLogin: () => void login(),
+    loginBusy: state.status === 'logging-in',
+  };
+
+  return (
+    <div className={tab === 'arena' ? 'hive-surface' : ''}>
+      <Hud config={state.config} tab={tab} onTab={setTab} wallet={walletProps} />
+      {tab === 'arena' ? (
+        <ArenaView
+          config={state.config}
+          onBuy={(id) => {
+            setLedgerFocus(id);
+            setTab('ledger');
+          }}
+        />
+      ) : tab === 'ledger' ? (
+        <LedgerApp wallet={wallet} focusId={ledgerFocus} />
+      ) : tab === 'simulation' ? (
+        <main className="shell-main">
+          <SimulationPanel />
+        </main>
+      ) : (
+        <main className="shell-main">
+          <section className="mode-page">
+            <h2 className="ledger-heading">Trust boundary</h2>
+            <DisclosurePanel />
+            <h2 className="ledger-heading">The agents</h2>
+            <AgentRoleNote />
+            <AgentsPanel />
+          </section>
+        </main>
+      )}
+    </div>
+  );
+}
+
+/** Today's ruled-ledger dashboard, unchanged, as the LEDGER tab. */
+function LedgerApp({ wallet, focusId }: { wallet: ReturnType<typeof useWallet>; focusId: number | null }) {
+  const { state, connect, disconnect, login } = wallet;
   const [mode, setMode] = useState<Mode>('live');
   const [domain, setDomain] = useState<'all' | 'price' | 'weather'>('all');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(focusId);
   const { data: questions } = usePolling(() => api.questions(0, 100), 15_000, []);
+  // A Round handed over from the Arena may be newer than the first page.
+  const { data: focused } = usePolling(
+    () => (selectedId === null ? Promise.resolve(null) : api.question(selectedId)),
+    15_000,
+    [selectedId],
+  );
 
   const selected: QuestionView | null =
-    questions?.questions.find((q) => q.question_id === selectedId) ?? null;
+    questions?.questions.find((q) => q.question_id === selectedId) ??
+    (focused && focused.question_id === selectedId ? focused : null);
 
   return (
     <Shell
@@ -39,6 +118,7 @@ export function App() {
       onLogin={() => void login()}
       loginBusy={state.status === 'logging-in'}
       error={state.error}
+      embedded
     >
       {mode === 'live' ? (
         <LiveView

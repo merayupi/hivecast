@@ -33,6 +33,7 @@ export function Shell({
   loginBusy,
   error,
   children,
+  embedded = false,
 }: {
   config: PublicConfig | null;
   mode: Mode;
@@ -46,10 +47,13 @@ export function Shell({
   loginBusy: boolean;
   error: string | null;
   children: React.ReactNode;
+  /** Inside the Arena app shell (LEDGER tab): the HUD replaces the top bar. */
+  embedded?: boolean;
 }) {
   const networkId = config?.networkId ?? 'testnet';
   return (
     <div className="shell">
+      {embedded ? null : (
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">HC</span>
@@ -77,6 +81,7 @@ export function Shell({
           />
         </div>
       </header>
+      )}
 
       <nav className="mode-strip" aria-label="Mode">
         {MODES.map((m) => (
@@ -103,7 +108,7 @@ export function Shell({
   );
 }
 
-function WalletControl({
+export function WalletControl({
   accountId,
   authenticated,
   connecting,

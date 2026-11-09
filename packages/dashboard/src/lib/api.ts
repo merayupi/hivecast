@@ -5,6 +5,7 @@
  */
 
 import type {
+  ActivityPage,
   AgentRosterEntry,
   ApiError,
   BalanceView,
@@ -69,6 +70,8 @@ export const api = {
   leaderboard: () => get<GlobalLeaderboard>('/analytics/leaderboard'),
   economics: () => get<EconomicsReport>('/analytics/economics'),
   simulation: () => get<ReplayReport>('/simulation/report'),
+  activity: (limit = 50, before?: string) =>
+    get<ActivityPage>(`/activity?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`),
   balance: (accountId: string) => get<BalanceView>(`/account/${accountId}/balance`),
   pendingWithdrawals: async (accountId: string) =>
     (await get<{ pending_withdrawals: PendingWithdrawalView[] }>(`/account/${accountId}/pending-withdrawals`)).pending_withdrawals,

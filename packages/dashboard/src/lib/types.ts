@@ -144,6 +144,42 @@ export interface ComparisonParticipant {
   revealed_prob_bps: number | null;
   valid_revealer: boolean;
   brier: number | null;
+  /** SETTLED only: stake-pot payout / Query-Fee share (yoctoNEAR); absent on an older runner. */
+  base_payout?: string | null;
+  fee_payout?: string | null;
+}
+
+/** Provenance of comparison payouts: recomputed with the shared core settle(). */
+export interface PayoutProvenance {
+  computed: true;
+  method: string;
+}
+
+export type ActivityKind =
+  | 'create'
+  | 'commit'
+  | 'snapshot'
+  | 'buy'
+  | 'resolve'
+  | 'reveal'
+  | 'settle'
+  | 'cancel'
+  | 'refund'
+  | 'withdraw';
+
+export interface ActivityItem {
+  kind: ActivityKind;
+  question_id: number | null;
+  account_id: string;
+  tx_hash: string;
+  /** UTC ns decimal string of the including block, or null while unobservable. */
+  finalized_at: string | null;
+}
+
+export interface ActivityPage {
+  items: ActivityItem[];
+  next_cursor: string | null;
+  coverage_note: string;
 }
 
 export interface QuestionComparison {
@@ -156,6 +192,8 @@ export interface QuestionComparison {
   participant_count: number;
   total_stake: string;
   single_agent: boolean;
+  /** SETTLED only (absent on an older runner). */
+  payouts?: PayoutProvenance | null;
   participants: ComparisonParticipant[];
 }
 
