@@ -13,6 +13,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Runtime } from './runtime.js';
 import { AccessError, ACCESS_HTTP_STATUS } from './access/index.js';
 import { ChainUnavailableError } from './chain/index.js';
+import { ACTIVITY_MAX_LIMIT } from './public-data.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -192,6 +193,23 @@ export function createPublicService(runtime: Runtime): Server {
       if (req.method === 'GET' && url.pathname === '/analytics/economics') {
         const economics = await runtime.getEconomics();
         return sendJson(res, 200, economics, runtime);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/activity') {
+        const rawLimit = url.searchParams.get('limit');
+        const rawBefore = url.searchParams.get('before');
+        const limit = rawLimit === null || rawLimit === '' ? 50 : Number(rawLimit);
+        if (!Number.isInteger(limit) || limit < 1 || limit > ACTIVITY_MAX_LIMIT) {
+          return sendJson(res, 400, { error: 'invalid_limit', message: `limit must be 1..${ACTIVITY_MAX_LIMIT}` }, runtime);
+        }
+        let before: number | null = null;
+        if (rawBefore !== null && rawBefore !== '') {
+          if (!/^\d{1,15}$/.test(rawBefore)) {
+            return sendJson(res, 400, { error: 'invalid_cursor', message: 'before must be a cursor from next_cursor' }, runtime);
+          }
+          before = Number(rawBefore);
+        }
+        return sendJson(res, 200, await runtime.getActivity(before, limit), runtime);
       }
 
       // ---- Public finalized transaction receipt (read-only, keyless) -------

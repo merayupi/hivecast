@@ -512,6 +512,43 @@ export class NearChainClient implements ChainClient {
     };
   }
 
+  /**
+   * Block hash + `timestamp_nanosec` of the block that includes a FINAL
+   * transaction (read-only, keyless). Unknown/non-final → null; transient RPC
+   * failure → ChainUnavailableError.
+   */
+  async viewTxBlockTime(txHash: string, accountId: string): Promise<{ blockHash: string; timestampNs: string } | null> {
+    let res: unknown;
+    try {
+      res = await this.withReadTimeout(`viewTxBlockTime(${txHash})`, () =>
+        this.provider.viewTransactionStatus({ txHash, accountId, waitUntil: 'NONE' }),
+      );
+    } catch (err) {
+      if (err instanceof UnknownTransactionError) return null;
+      throw new ChainUnavailableError(`viewTxBlockTime unavailable for ${txHash}: ${(err as Error).message}`);
+    }
+    if (typeof res !== 'object' || res === null) {
+      throw new ChainUnavailableError(`viewTxBlockTime returned a malformed status for ${txHash}`);
+    }
+    const r = res as { final_execution_status?: unknown; transaction_outcome?: { block_hash?: unknown } };
+    if (r.final_execution_status !== 'FINAL') return null;
+    const blockHash = r.transaction_outcome?.block_hash;
+    if (typeof blockHash !== 'string' || blockHash === '') {
+      throw new ChainUnavailableError(`viewTxBlockTime: no transaction_outcome.block_hash for ${txHash}`);
+    }
+    let block: unknown;
+    try {
+      block = await this.withReadTimeout(`viewBlock(${blockHash})`, () => this.provider.viewBlock({ blockId: blockHash }));
+    } catch (err) {
+      throw new ChainUnavailableError(`viewBlock unavailable for ${blockHash}: ${(err as Error).message}`);
+    }
+    const ts = (block as { header?: { timestamp_nanosec?: unknown } })?.header?.timestamp_nanosec;
+    if (typeof ts !== 'string' || !/^\d+$/.test(ts)) {
+      throw new ChainUnavailableError(`viewBlock returned no timestamp_nanosec for ${blockHash}`);
+    }
+    return { blockHash, timestampNs: ts };
+  }
+
   createQuestion(spec: QuestionSpecArgs, signer: string): Promise<CallOutcome> {
     // Actual wire shape: create_question(&mut self, spec: QuestionSpec).
     return this.call('create_question', { spec }, signer, 0n);

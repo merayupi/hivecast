@@ -29,9 +29,10 @@ import {
   computeQuestionComparison,
   computeSimulationReport,
   computeAccountEconomics,
+  computeActivityPage,
 } from './public-data.js';
 import { PublicChainCache } from './public-cache.js';
-import type { GlobalLeaderboard, QuestionComparison, EconomicsReport } from './public-data.js';
+import type { GlobalLeaderboard, QuestionComparison, EconomicsReport, ActivityPage } from './public-data.js';
 import type { ReplayReport } from '@hivecast/simulation';
 
 /** Public Agent roster entry: identity, supported domains, and account. */
@@ -268,6 +269,12 @@ export class Runtime {
   /** Per-Question public comparison (scores only once the Outcome is final). */
   async getQuestionComparison(questionId: number): Promise<QuestionComparison | null> {
     return computeQuestionComparison(this.publicReads, questionId);
+  }
+
+  /** Public activity feed (runner-signed finalized transactions), newest first. */
+  async getActivity(before: number | null, limit: number): Promise<ActivityPage> {
+    const rows = this.store.listConfirmedActivity(before, limit + 1);
+    return computeActivityPage(this.publicReads, rows, limit);
   }
 
   /** Deterministic offline simulation report (reused from @hivecast/simulation). */

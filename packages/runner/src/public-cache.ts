@@ -34,6 +34,8 @@ export interface PublicReadSource {
   viewNativeBalance(accountId: string): Promise<bigint | null>;
   viewNativeAvailable(accountId: string): Promise<bigint | null>;
   viewTxTokensBurnt(txHash: string, accountId: string): Promise<string | null>;
+  /** Inclusion block time (UTC ns) of a FINAL tx, cached immutably; null when unknown/non-final. */
+  viewTxTimestampNs(txHash: string, accountId: string): Promise<string | null>;
   /** Durable local capital reservation for an account (throws on DB failure). */
   getLocalReserved(accountId: string): bigint;
   /** Coverage: whether full history has been bootstrapped and persisted. */
@@ -236,6 +238,15 @@ export class PublicChainCache implements PublicReadSource {
 
   async viewNativeAvailable(accountId: string): Promise<bigint | null> {
     return (await this.nativesFor(accountId)).available;
+  }
+
+  async viewTxTimestampNs(txHash: string, accountId: string): Promise<string | null> {
+    const cached = this.store.getPublicTxTime(txHash);
+    if (cached) return cached.timestampNs;
+    const t = await this.chain.viewTxBlockTime(txHash, accountId);
+    if (!t) return null;
+    this.store.savePublicTxTime(txHash, accountId, t.blockHash, t.timestampNs);
+    return t.timestampNs;
   }
 
   async viewTxTokensBurnt(txHash: string, accountId: string): Promise<string | null> {

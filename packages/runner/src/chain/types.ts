@@ -143,6 +143,14 @@ export interface ChainClient {
   viewTxFinalStatus(txHash: string, accountId: string): Promise<TxFinalStatusView | null>;
 
   /**
+   * Finalized on-chain time of a transaction: the hash and `timestamp_nanosec`
+   * (UTC ns decimal string) of the block that includes it. Returns null when
+   * the transaction is unknown or not yet FINAL; throws `ChainUnavailableError`
+   * on a transient RPC failure (never a guessed time).
+   */
+  viewTxBlockTime(txHash: string, accountId: string): Promise<{ blockHash: string; timestampNs: string } | null>;
+
+  /**
    * Build + sign a contract call WITHOUT broadcasting. Persisting its bytes
    * before `broadcastCall` makes every mutation crash-safe: while the outcome
    * is uncertain, the runner rebroadcasts THIS same signed transaction instead

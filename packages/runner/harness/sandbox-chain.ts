@@ -115,6 +115,10 @@ export class SandboxChainBase implements ChainClient {
     return this.inner.viewTxFinalStatus(txHash, accountId);
   }
 
+  viewTxBlockTime(txHash: string, accountId: string): Promise<{ blockHash: string; timestampNs: string } | null> {
+    return this.inner.viewTxBlockTime(txHash, accountId);
+  }
+
   prepareCall(
     methodName: string,
     args: Record<string, unknown>,

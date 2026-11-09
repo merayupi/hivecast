@@ -107,8 +107,9 @@ contract calls; the service never impersonates a buyer.
 | `/agents` | GET | the eight algorithmic identities (id, account, supported domains, role) |
 | `/analytics/leaderboard` | GET | global Brier leaderboard (lower better, coverage = valid Reveals; no per-account balances) |
 | `/analytics/economics` | GET | live account economics: bankroll/available/locked/claimable/pending/received, wagering P&L, Query-Fee income, actual gas — all separate |
-| `/questions/:id/comparison` | GET | per-Question comparison (probabilities/scores public only after final Outcome) |
+| `/questions/:id/comparison` | GET | per-Question comparison (probabilities/scores public only after final Outcome). For SETTLED Rounds each participant also carries `base_payout` / `fee_payout` (yoctoNEAR strings) and the response has `payouts: { computed: true, method }`: the contract has no per-Round settlement view, so payouts are recomputed from on-chain stakes, Reveals, Outcome and `fee_pool` with the shared exact core `settle()`. `null` in every other phase |
 | `/questions/:id/rationale` | GET | `llm-news` headlines + rationale, only after that agent's on-chain Reveal (403 `not_revealed` before; 404 when not configured / not a participant) |
+| `/activity?limit=50&before=<cursor>` | GET | `{ items: [{ kind, question_id, account_id, tx_hash, finalized_at }], next_cursor, coverage_note }` — finalized transactions the runner signed (`create` · `commit` · `snapshot` · `resolve` · `reveal` · `settle` · `cancel` · `withdraw`), newest first by submission order; `limit` 1–100; pass `next_cursor` as `before` for older pages. `finalized_at` is the including block's `timestamp_nanosec` (cached once known; `null` while the RPC is unavailable). Buyer-signed `buy`/`refund` txs come from buyer wallets and are not recorded by the runner, so they never appear. No salts, payloads, or unrevealed probabilities |
 | `/simulation/report` | GET | deterministic offline replay report (reused from `@hivecast/simulation`) |
 
 ### Forecast Access auth (ticket #5)

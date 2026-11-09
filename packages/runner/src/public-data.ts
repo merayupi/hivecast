@@ -27,6 +27,8 @@ import type { ChainClient } from './chain/types.js';
 import type { PublicReadSource } from './public-cache.js';
 import type { Phase, QuestionView } from './types.js';
 import type { PublicJournalRow } from './store.js';
+import type { JournalKind } from './types.js';
+import { ChainUnavailableError } from './chain/index.js';
 
 /** Brier error scale: (p - o)^2 with p,o in bps -> at most 10^8. */
 const BRIER_SQ_SCALE = 100_000_000; // 10^8
@@ -43,6 +45,23 @@ export interface ComparisonParticipant {
   valid_revealer: boolean;
   /** Brier error in [0,1] (lower better); `null` when not revealed. */
   brier: number | null;
+  /**
+   * Settled Rounds only (else `null`): the participant's stake-pot payout and
+   * Query-Fee share, yoctoNEAR decimal strings. See `QuestionComparison.payouts`.
+   */
+  base_payout: string | null;
+  fee_payout: string | null;
+}
+
+/**
+ * Provenance of the per-participant payouts. The contract exposes no
+ * per-Round settlement view, so payouts are recomputed from on-chain
+ * stakes, Reveals, Outcome and fee pool with the shared exact `settle`
+ * accounting (`@hivecast/core`, the formula the contract mirrors).
+ */
+export interface PayoutProvenance {
+  computed: true;
+  method: string;
 }
 
 export interface QuestionComparison {
@@ -57,6 +76,8 @@ export interface QuestionComparison {
   participant_count: number;
   total_stake: string;
   single_agent: boolean;
+  /** Present for SETTLED Rounds only; `null` otherwise. */
+  payouts: PayoutProvenance | null;
   participants: ComparisonParticipant[];
 }
 
@@ -226,9 +247,12 @@ export async function computeQuestionComparison(
   const scoresPublic = (q.phase === 'resolved' || q.phase === 'settled') && q.outcome !== null;
   const commitments = await source.listAllCommitments(questionId);
 
+  const payoutByAccount = settledPayouts(q, commitments);
+
   const participants: ComparisonParticipant[] = commitments.map((c) => {
     const revealed = c.revealed !== null && c.revealed !== undefined ? c.revealed : null;
     const brier = revealed !== null && scoresPublic ? brierSq(revealed, q.outcome)! / BRIER_SQ_SCALE : null;
+    const payout = payoutByAccount?.get(c.account_id) ?? null;
     return {
       account_id: c.account_id,
       stake: c.stake,
@@ -236,6 +260,8 @@ export async function computeQuestionComparison(
       revealed_prob_bps: revealed,
       valid_revealer: revealed !== null,
       brier,
+      base_payout: payout ? payout.base.toString() : null,
+      fee_payout: payout ? payout.fee.toString() : null,
     };
   });
 
@@ -249,7 +275,125 @@ export async function computeQuestionComparison(
     participant_count: q.participant_count,
     total_stake: q.total_stake,
     single_agent: q.participant_count === 1,
+    payouts: payoutByAccount ? PAYOUT_PROVENANCE : null,
     participants,
+  };
+}
+
+const PAYOUT_PROVENANCE: PayoutProvenance = {
+  computed: true,
+  method:
+    'Recomputed from on-chain stakes, Reveals, Outcome and fee_pool with the shared exact settle() accounting in @hivecast/core; the contract has no per-Round settlement view.',
+};
+
+/**
+ * Exact per-account payouts of a SETTLED Round via the shared core `settle`
+ * (same call as the live economics report). `null` for any other phase or a
+ * missing Outcome, never an estimate.
+ */
+function settledPayouts(
+  q: QuestionView,
+  commitments: readonly { account_id: string; stake: string; revealed: number | null }[],
+): Map<string, { base: bigint; fee: bigint }> | null {
+  if (q.phase !== 'settled' || (q.outcome !== true && q.outcome !== false)) return null;
+  const s = settle(
+    commitments.map((c) => ({
+      accountId: c.account_id,
+      stake: BigInt(c.stake),
+      probabilityBps: c.revealed ?? 0,
+      isValidRevealer: c.revealed !== null && c.revealed !== undefined,
+    })),
+    q.outcome ? 10_000 : 0,
+    BigInt(q.fee_pool),
+  );
+  const out = new Map<string, { base: bigint; fee: bigint }>();
+  for (const row of s.rows) out.set(row.accountId, { base: row.basePayout, fee: row.feePayout });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Public activity feed: finalized transactions the runner itself signed.
+// ---------------------------------------------------------------------------
+
+export type ActivityKind =
+  | 'create'
+  | 'commit'
+  | 'snapshot'
+  | 'buy'
+  | 'resolve'
+  | 'reveal'
+  | 'settle'
+  | 'cancel'
+  | 'refund'
+  | 'withdraw';
+
+const JOURNAL_ACTIVITY_KIND: Record<JournalKind, ActivityKind> = {
+  create_question: 'create',
+  commit: 'commit',
+  publish_snapshot: 'snapshot',
+  resolve: 'resolve',
+  reveal: 'reveal',
+  settle: 'settle',
+  cancel: 'cancel',
+  withdraw: 'withdraw',
+};
+
+export interface ActivityItem {
+  kind: ActivityKind;
+  question_id: number | null;
+  /** Signer of the transaction. */
+  account_id: string;
+  tx_hash: string;
+  /** UTC ns decimal string of the including block; `null` while unobservable (RPC unavailable). */
+  finalized_at: string | null;
+}
+
+export interface ActivityPage {
+  items: ActivityItem[];
+  /** Pass as `before` to fetch the next (older) page; `null` at the end. */
+  next_cursor: string | null;
+  coverage_note: string;
+}
+
+export const ACTIVITY_COVERAGE_NOTE =
+  'Transactions the runner signed and saw finalized (create, commit, snapshot, resolve, reveal, settle, cancel, withdraw), newest first by submission order. Buyer-signed buy/refund transactions are sent from buyer wallets and are not recorded by the runner, so they do not appear here. No salts or unrevealed probabilities are included.';
+
+export const ACTIVITY_MAX_LIMIT = 100;
+
+/**
+ * One page of the activity feed. `rows` must be the journal's confirmed rows
+ * newest first, fetched with `limit + 1` so the presence of an older page is
+ * known without a second query.
+ */
+export async function computeActivityPage(
+  source: Pick<PublicReadSource, 'viewTxTimestampNs'>,
+  rows: readonly (PublicJournalRow & { id: number })[],
+  limit: number,
+): Promise<ActivityPage> {
+  const page = rows.slice(0, limit);
+  const items: ActivityItem[] = [];
+  for (const r of page) {
+    if (!r.txHash || !r.accountId) continue;
+    let finalizedAt: string | null;
+    try {
+      finalizedAt = await source.viewTxTimestampNs(r.txHash, r.accountId);
+    } catch (err) {
+      if (!(err instanceof ChainUnavailableError)) throw err;
+      finalizedAt = null;
+    }
+    items.push({
+      kind: JOURNAL_ACTIVITY_KIND[r.kind],
+      question_id: r.questionId,
+      account_id: r.accountId,
+      tx_hash: r.txHash,
+      finalized_at: finalizedAt,
+    });
+  }
+  const last = page[page.length - 1];
+  return {
+    items,
+    next_cursor: rows.length > limit && last ? String(last.id) : null,
+    coverage_note: ACTIVITY_COVERAGE_NOTE,
   };
 }
 

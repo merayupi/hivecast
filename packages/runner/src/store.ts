@@ -293,6 +293,14 @@ export class Store {
         tokens_burnt TEXT NOT NULL,
         cached_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS public_tx_time (
+        tx_hash TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        block_hash TEXT NOT NULL,
+        block_timestamp_ns TEXT NOT NULL,
+        cached_at INTEGER NOT NULL
+      );
     `);
   }
 
@@ -404,6 +412,48 @@ export class Store {
       .get(txHash) as { account_id: string; final_status: string; success_value: number; tokens_burnt: string } | undefined;
     if (!row) return null;
     return { accountId: row.account_id, finalStatus: row.final_status, successValue: row.success_value === 1, tokensBurnt: row.tokens_burnt };
+  }
+
+  /** Cache the inclusion block time of a FINAL transaction (immutable once known). */
+  savePublicTxTime(txHash: string, accountId: string, blockHash: string, timestampNs: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO public_tx_time (tx_hash, account_id, block_hash, block_timestamp_ns, cached_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(txHash, accountId, blockHash, timestampNs, Date.now());
+  }
+
+  getPublicTxTime(txHash: string): { blockHash: string; timestampNs: string } | null {
+    const row = this.db
+      .prepare('SELECT block_hash, block_timestamp_ns FROM public_tx_time WHERE tx_hash = ?')
+      .get(txHash) as { block_hash: string; block_timestamp_ns: string } | undefined;
+    return row ? { blockHash: row.block_hash, timestampNs: row.block_timestamp_ns } : null;
+  }
+
+  /**
+   * Confirmed journal transactions (with a hash), newest first by journal id,
+   * strictly before `beforeId` when given. Public-safe columns only: never the
+   * payload, salt, signed bytes, dedup key, or error.
+   */
+  listConfirmedActivity(beforeId: number | null, limit: number): (PublicJournalRow & { id: number })[] {
+    const sql =
+      `SELECT id, tx_hash, kind, account_id, question_id, status, created_at, updated_at FROM journal
+       WHERE status = 'confirmed' AND tx_hash IS NOT NULL AND account_id IS NOT NULL` +
+      (beforeId === null ? '' : ' AND id < ?') +
+      ' ORDER BY id DESC LIMIT ?';
+    const params = beforeId === null ? [limit] : [beforeId, limit];
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: Number(r.id),
+      txHash: r.tx_hash as string,
+      kind: r.kind as JournalKind,
+      accountId: r.account_id as string | null,
+      questionId: r.question_id === null ? null : Number(r.question_id),
+      status: r.status as JournalStatus,
+      createdAtMs: Number(r.created_at),
+      updatedAtMs: Number(r.updated_at),
+    }));
   }
 
   // -------------------------------------------------------------------------
