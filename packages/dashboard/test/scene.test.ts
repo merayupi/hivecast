@@ -274,3 +274,19 @@ test('coin size tiers follow real amounts; story lengths are finite', () => {
   assert.ok(storyDuration(s) > 0 && Number.isFinite(storyDuration(s)));
   assert.deepEqual(coinFlows([]), []);
 });
+
+test('stage scale is a whole number of device pixels per logical pixel (no resampling blur)', async () => {
+  const { stageScale } = await import('../src/arena/renderer');
+  assert.deepEqual(stageScale(1040, 1), { deviceScale: 3, cssWidth: 960 });
+  // 125% Windows scaling: 1040 CSS px = 1300 device px → 4 device px per logical px.
+  const s125 = stageScale(1040, 1.25);
+  assert.equal(s125.deviceScale, 4);
+  assert.equal(s125.cssWidth * 1.25, 1280);
+  // 150%: 6 device px would need 1280 CSS px; 1040 fits 4 (1280 device px).
+  assert.equal(stageScale(1040, 1.5).deviceScale, 4);
+  // Phone (390 px, dpr 3): 358 CSS px of room → 3 device px per logical px.
+  const phone = stageScale(358, 3);
+  assert.equal(phone.deviceScale, 3);
+  assert.equal(phone.cssWidth, 320);
+  assert.equal(stageScale(100, 1).deviceScale, 1, 'never below 1');
+});

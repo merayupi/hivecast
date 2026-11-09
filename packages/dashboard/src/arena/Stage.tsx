@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { STAGE_H, STAGE_W } from './palette';
 import type { Scene } from './scene';
-import { drawScene, hitEnvelope, type SpriteBank } from './renderer';
+import { drawScene, hitEnvelope, stageScale, type SpriteBank } from './renderer';
 
 export function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(() =>
@@ -37,7 +37,9 @@ export function Stage({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [scale, setScale] = useState(1);
+  // deviceScale = device pixels per logical pixel (an integer, so every
+  // logical pixel is an exact block of screen pixels: no resampling blur).
+  const [fit, setFit] = useState(() => stageScale(STAGE_W, 1));
   const reduced = usePrefersReducedMotion();
   const storyStart = useRef(performance.now());
   const sceneRef = useRef(scene);
@@ -51,7 +53,8 @@ export function Stage({
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
       const w = entry?.contentRect.width ?? STAGE_W;
-      setScale(Math.max(1, Math.min(4, Math.floor(w / STAGE_W))));
+      const next = stageScale(w, window.devicePixelRatio || 1);
+      setFit((prev) => (prev.deviceScale === next.deviceScale && prev.cssWidth === next.cssWidth ? prev : next));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -71,8 +74,10 @@ export function Stage({
     if (!g) return;
     let raf = 0;
     const loopStart = performance.now();
+    const ds = fit.deviceScale;
     const frame = () => {
       const now = performance.now();
+      g.setTransform(ds, 0, 0, ds, 0, 0);
       drawScene(g, bank, sceneRef.current, {
         storyMs: now - storyStart.current,
         loopMs: now - loopStart,
@@ -93,22 +98,23 @@ export function Stage({
     };
     // The animated loop reads scene/highlight through refs; only the static
     // (reduced-motion) frame needs a redraw when they change.
-  }, [bank, reduced, reduced ? scene : null, reduced ? highlightEnvelope : null]);
+  }, [bank, reduced, fit, reduced ? scene : null, reduced ? highlightEnvelope : null]);
 
   const toLogical = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
-    return { x: Math.floor((e.clientX - r.left) / scale), y: Math.floor((e.clientY - r.top) / scale) };
+    const k = r.width / STAGE_W;
+    return { x: Math.floor((e.clientX - r.left) / k), y: Math.floor((e.clientY - r.top) / k) };
   };
 
   return (
     <div ref={wrapRef} className="arena-stage-wrap">
       <canvas
         ref={canvasRef}
-        width={STAGE_W}
-        height={STAGE_H}
+        width={STAGE_W * fit.deviceScale}
+        height={STAGE_H * fit.deviceScale}
         aria-hidden="true"
         className="arena-canvas"
-        style={{ width: STAGE_W * scale, height: STAGE_H * scale, cursor: highlightEnvelope !== null ? 'pointer' : 'default' }}
+        style={{ width: fit.cssWidth, height: (fit.cssWidth * STAGE_H) / STAGE_W, cursor: highlightEnvelope !== null ? 'pointer' : 'default' }}
         onMouseMove={(e) => {
           const p = toLogical(e);
           onEnvelope(hitEnvelope(p.x, p.y, scene.actors.length), false);

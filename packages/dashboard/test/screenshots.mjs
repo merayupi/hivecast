@@ -61,6 +61,7 @@ const STATES = [
   { name: 'cancelled-empty', query: '?round=0', note: 'q0 cancelled, no commitments' },
   { name: 'default-pick', query: '', note: 'auto-picked default Round' },
   { name: 'no-data-api-down', query: '', note: 'runner API unreachable', down: true },
+  { name: 'ledger-tab', query: '#ledger', note: 'LEDGER tab: the unchanged ledger as a sheet in the night frame' },
 ];
 
 const VIEWPORTS = [

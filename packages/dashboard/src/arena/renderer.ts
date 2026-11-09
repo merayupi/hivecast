@@ -80,6 +80,17 @@ export function coinTier(amount: bigint, max: bigint): 1 | 2 | 3 {
   return r > 0.5 ? 3 : r > 0.15 ? 2 : 1;
 }
 
+/**
+ * Stage size for a container `cssWidth` wide on a `dpr` display: the largest
+ * whole number of DEVICE pixels per logical pixel that fits (at most 4 CSS
+ * px per logical px), and the CSS width that maps exactly onto them.
+ */
+export function stageScale(cssWidth: number, dpr: number): { deviceScale: number; cssWidth: number } {
+  const maxDevice = Math.floor(4 * dpr + 1e-6);
+  const deviceScale = Math.max(1, Math.min(maxDevice, Math.floor((cssWidth * dpr + 1e-6) / STAGE_W)));
+  return { deviceScale, cssWidth: (STAGE_W * deviceScale) / dpr };
+}
+
 /** Total story length (ms) so the UI knows when the story has finished. */
 export function storyDuration(scene: Scene): number {
   const n = scene.actors.length;
@@ -110,12 +121,12 @@ function rect(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: n
   g.fillRect(R(x), R(y), w, h);
 }
 
-function text(g: CanvasRenderingContext2D, bank: SpriteBank, s: string, x: number, y: number, color: string, align: CanvasTextAlign = 'center', size = 8) {
+function text(g: CanvasRenderingContext2D, bank: SpriteBank, s: string, x: number, y: number, color: string, align: CanvasTextAlign = 'center', size = 8, shadow = true) {
   g.font = bank.font.replace(/^\d+px/, `${size}px`);
   g.textAlign = align;
   g.textBaseline = 'top';
   g.fillStyle = HIVE.ink;
-  g.fillText(s, R(x) + 1, R(y) + 1);
+  if (shadow) g.fillText(s, R(x) + 1, R(y) + 1);
   g.fillStyle = color;
   g.fillText(s, R(x), R(y));
 }
@@ -329,11 +340,9 @@ function drawCharacter(
     if (pose === 'seal' || pose === 'reveal') y -= poseMs > 0 && poseMs < 400 ? 2 : 0;
     if (pose === 'win') y -= Math.floor(loopMs / 220) % 2 === 0 ? 2 : 0;
     if (pose === 'lose') y += 1;
-    g.drawImage(sprite.image, x, y);
-    if (pose === 'lose') {
-      rect(g, x + 8, y + 15, 3, 1, HIVE.ink);
-      rect(g, x + 13, y + 15, 3, 1, HIVE.ink);
-    }
+    g.drawImage(sprite.image, x, y, 24, 24);
+    // The initial is drawn live so it stays sharp at any device scale.
+    text(g, bank, sprite.spec.initial, x + 12, y + 7, sprite.spec.textColor, 'center', 11, false);
   }
   g.globalAlpha = 1;
 }

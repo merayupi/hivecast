@@ -180,7 +180,7 @@ export async function loadBackground(base: string): Promise<HTMLImageElement | n
 }
 
 /** Draw a 24×24 placeholder: a pixel-rounded square in the main colour with the initial. */
-export function drawPlaceholder(spec: PlaceholderSpec, font: string): HTMLCanvasElement {
+export function drawPlaceholder(spec: PlaceholderSpec, font: string, withInitial = true): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = spec.size;
   c.height = spec.size;
@@ -201,6 +201,7 @@ export function drawPlaceholder(spec: PlaceholderSpec, font: string): HTMLCanvas
   };
   rows(0, spec.outline);
   rows(1, spec.fill);
+  if (!withInitial) return c;
   g.fillStyle = spec.textColor;
   g.font = font;
   g.textAlign = 'center';
@@ -242,6 +243,7 @@ export async function loadCharacter(
     return await loadSheet(base, persona.agentId, CHARACTER_FRAME);
   } catch (err) {
     const spec = placeholderSpec(persona);
-    return { kind: 'placeholder', image: drawPlaceholder(spec, font), spec, reason: (err as Error).message };
+    // The renderer draws the initial at full resolution on top.
+    return { kind: 'placeholder', image: drawPlaceholder(spec, font, false), spec, reason: (err as Error).message };
   }
 }

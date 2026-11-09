@@ -56,7 +56,7 @@ export function App() {
   };
 
   return (
-    <div className={tab === 'arena' ? 'hive-surface' : ''}>
+    <div className="hive-surface">
       <Hud config={state.config} tab={tab} onTab={setTab} wallet={walletProps} />
       {tab === 'arena' ? (
         <ArenaView
@@ -66,22 +66,28 @@ export function App() {
             setTab('ledger');
           }}
         />
-      ) : tab === 'ledger' ? (
-        <LedgerApp wallet={wallet} focusId={ledgerFocus} />
-      ) : tab === 'simulation' ? (
-        <main className="shell-main">
-          <SimulationPanel />
-        </main>
       ) : (
-        <main className="shell-main">
-          <section className="mode-page">
-            <h2 className="ledger-heading">Trust boundary</h2>
-            <DisclosurePanel />
-            <h2 className="ledger-heading">The agents</h2>
-            <AgentRoleNote />
-            <AgentsPanel />
-          </section>
-        </main>
+        // The ruled ledger keeps its own light paper theme, shown as a sheet
+        // inside the night frame so every tab shares one surface.
+        <div className="ledger-sheet">
+          {tab === 'ledger' ? (
+            <LedgerApp wallet={wallet} focusId={ledgerFocus} />
+          ) : tab === 'simulation' ? (
+            <main className="shell-main sheet-pad">
+              <SimulationPanel />
+            </main>
+          ) : (
+            <main className="shell-main sheet-pad">
+              <section className="mode-page">
+                <h2 className="ledger-heading">Trust boundary</h2>
+                <DisclosurePanel />
+                <h2 className="ledger-heading">The agents</h2>
+                <AgentRoleNote />
+                <AgentsPanel />
+              </section>
+            </main>
+          )}
+        </div>
       )}
     </div>
   );

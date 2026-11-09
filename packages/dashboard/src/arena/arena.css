@@ -32,6 +32,26 @@
   color: var(--hive-cream);
 }
 
+/* Non-arena tabs: the light ruled ledger as a paper sheet in the night frame. */
+.ledger-sheet {
+  max-width: 1320px;
+  margin: 1.25rem auto 2.5rem;
+  padding-top: 1.25rem;
+  background: var(--color-bone-100);
+  color: var(--color-ink-900);
+  border: 2px solid var(--hive-violet);
+  box-shadow: 6px 6px 0 var(--hive-ink);
+}
+.ledger-sheet .sheet-pad { padding: 0 1.5rem 2rem; }
+@media (max-width: 1360px) {
+  .ledger-sheet { margin: 1rem 1rem 2rem; }
+}
+@media (max-width: 480px) {
+  .ledger-sheet { margin: 0.5rem 0.5rem 1.5rem; box-shadow: 3px 3px 0 var(--hive-ink); }
+  .ledger-sheet .sheet-pad { padding: 0 0.9rem 1.5rem; }
+}
+html, body { background: var(--hive-night); }
+
 /* ---- HUD ---------------------------------------------------------------- */
 .hud {
   display: flex;
