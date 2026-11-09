@@ -34,6 +34,7 @@ function fixtureFor(url) {
   if (p === '/analytics/leaderboard') return ok(load('leaderboard'));
   if (p === '/analytics/economics') return ok(load('economics'));
   if (p === '/activity') return ok(load('activity'));
+  if (p === '/simulation/report') return ok(load('simulation-report'));
   if (p === '/questions') {
     const from = Number(u.searchParams.get('from_index') ?? '0');
     return ok(from === 0 ? load('questions') : JSON.stringify({ questions: [] }));
@@ -61,6 +62,8 @@ const STATES = [
   { name: 'cancelled-empty', query: '?round=0', note: 'q0 cancelled, no commitments' },
   { name: 'default-pick', query: '', note: 'auto-picked default Round' },
   { name: 'no-data-api-down', query: '', note: 'runner API unreachable', down: true },
+  { name: 'season-replay-start', query: '#simulation', note: 'SIMULATION: Season Replay at the start' },
+  { name: 'season-replay-final', query: '#simulation', note: 'SIMULATION: final standings (Play, reduced motion jumps to the end)', click: 'Play' },
   { name: 'ledger-tab', query: '#ledger', note: 'LEDGER tab: the unchanged ledger as a sheet in the night frame' },
 ];
 
@@ -87,6 +90,7 @@ try {
       );
       await page.goto(`${BASE}/${s.query}`, { waitUntil: 'networkidle' });
       await page.evaluate(() => document.fonts.ready);
+      if (s.click) await page.getByRole('button', { name: s.click, exact: true }).click();
       await page.waitForTimeout(800);
       const file = path.join(OUT, `${s.name}-${vp.name}.png`);
       await page.screenshot({ path: file, fullPage: true });
@@ -106,6 +110,13 @@ try {
   await page.waitForTimeout(1100);
   await page.locator('canvas').screenshot({ path: path.join(OUT, 'settled-coins-in-flight-stage.png') });
   console.log('settled-coins-in-flight-stage.png  (q4 coins mid-flight)');
+  await page.goto(`${BASE}/#simulation`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => document.fonts.ready);
+  await page.getByRole('button', { name: '16×' }).click();
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await page.waitForTimeout(1800);
+  await page.locator('canvas').screenshot({ path: path.join(OUT, 'season-replay-16x-midrace-stage.png') });
+  console.log('season-replay-16x-midrace-stage.png  (price season at 16×, mid-race)');
   await ctx.close();
 } finally {
   await browser.close();

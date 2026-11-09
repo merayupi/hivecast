@@ -15,6 +15,7 @@ import { api } from './lib/api';
 import type { QuestionView } from './lib/types';
 import { ArenaView } from './arena/ArenaView';
 import { Hud, TABS, type Tab } from './arena/Hud';
+import { SeasonRace } from './arena/SeasonReplay';
 import './arena/arena.css';
 
 type Mode = 'live' | 'simulation' | 'agents' | 'leaderboard' | 'disclosure';
@@ -66,16 +67,14 @@ export function App() {
             setTab('ledger');
           }}
         />
+      ) : tab === 'simulation' ? (
+        <SeasonReplayView />
       ) : (
         // The ruled ledger keeps its own light paper theme, shown as a sheet
         // inside the night frame so every tab shares one surface.
         <div className="ledger-sheet">
           {tab === 'ledger' ? (
             <LedgerApp wallet={wallet} focusId={ledgerFocus} />
-          ) : tab === 'simulation' ? (
-            <main className="shell-main sheet-pad">
-              <SimulationPanel />
-            </main>
           ) : (
             <main className="shell-main sheet-pad">
               <section className="mode-page">
@@ -90,6 +89,28 @@ export function App() {
         </div>
       )}
     </div>
+  );
+}
+
+/** SIMULATION: the Season Replay race on the night stage, the replay's accuracy chart and table below. */
+function SeasonReplayView() {
+  const { data, error, loading } = usePolling(() => api.simulation(), 60_000, []);
+  const [domain, setDomain] = useState<'price' | 'weather'>('price');
+  return (
+    <>
+      <div className="arena season-wrap">
+        {data ? (
+          <SeasonRace report={data} domain={domain} />
+        ) : (
+          <p className="no-data">{loading ? 'Loading the offline replay…' : `NO DATA YET — ${error ?? 'replay report unavailable'}`}</p>
+        )}
+      </div>
+      <div className="ledger-sheet">
+        <main className="shell-main sheet-pad">
+          <SimulationPanel domain={domain} onDomain={setDomain} hideBankroll />
+        </main>
+      </div>
+    </>
   );
 }
 

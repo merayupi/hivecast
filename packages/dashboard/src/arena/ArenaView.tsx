@@ -23,41 +23,11 @@ import type {
   PublicConfig,
   QuestionView,
 } from '../lib/types';
-import { PERSONAS, agentIdForAccount, personaFor } from './personas';
+import { agentIdForAccount, personaFor } from './personas';
 import { deriveScene, nextMilestone, pickDefaultRound, scheduleBoard, type Scene } from './scene';
 import { Stage } from './Stage';
-import { loadBackground, loadCharacter, loadSheet, type CharacterSprite } from './spriteSheet';
-import type { SpriteBank } from './renderer';
+import { useSpriteBank } from './useSpriteBank';
 import { useArenaData, useRoundComparison } from './useArenaData';
-
-const SPRITE_BASE = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/sprites`;
-const PIXEL_FONT = '8px "Pixelify Sans", ui-monospace, monospace';
-
-/** Load every character sheet, props and background, falling back to placeholders. */
-function useSpriteBank(): SpriteBank | null {
-  const [bank, setBank] = useState<SpriteBank | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        await Promise.race([document.fonts.load(PIXEL_FONT), new Promise((r) => setTimeout(r, 1500))]);
-      } catch {
-        // system monospace fallback
-      }
-      const characters = new Map<string, CharacterSprite>();
-      await Promise.all(
-        PERSONAS.map(async (p) => characters.set(p.agentId, await loadCharacter(SPRITE_BASE, p, '10px "Pixelify Sans", ui-monospace, monospace'))),
-      );
-      const props = await loadSheet(SPRITE_BASE, 'props').catch(() => null);
-      const background = await loadBackground(SPRITE_BASE);
-      if (!cancelled) setBank({ characters, props, background, font: PIXEL_FONT });
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return bank;
-}
 
 function readRoundParam(): number | null {
   const raw = new URLSearchParams(window.location.search).get('round');

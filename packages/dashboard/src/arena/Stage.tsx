@@ -18,6 +18,27 @@ export function usePrefersReducedMotion(): boolean {
 }
 
 /**
+ * Integer DEVICE pixels per logical pixel for a 320-wide pixel canvas inside
+ * `wrapRef` (see `stageScale`): every logical pixel is an exact block of
+ * screen pixels, so nothing is resampled on 125%/150% displays.
+ */
+export function usePixelFit(wrapRef: React.RefObject<HTMLElement | null>): { deviceScale: number; cssWidth: number } {
+  const [fit, setFit] = useState(() => stageScale(STAGE_W, 1));
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const w = entry?.contentRect.width ?? STAGE_W;
+      const next = stageScale(w, window.devicePixelRatio || 1);
+      setFit((prev) => (prev.deviceScale === next.deviceScale && prev.cssWidth === next.cssWidth ? prev : next));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [wrapRef]);
+  return fit;
+}
+
+/**
  * The 320×180 stage, scaled by the largest whole number that fits its
  * container. Decorative: `aria-hidden`; every fact is repeated in the DOM.
  */
@@ -37,28 +58,13 @@ export function Stage({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // deviceScale = device pixels per logical pixel (an integer, so every
-  // logical pixel is an exact block of screen pixels: no resampling blur).
-  const [fit, setFit] = useState(() => stageScale(STAGE_W, 1));
+  const fit = usePixelFit(wrapRef);
   const reduced = usePrefersReducedMotion();
   const storyStart = useRef(performance.now());
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
   const highlightRef = useRef(highlightEnvelope);
   highlightRef.current = highlightEnvelope;
-
-  // Integer scale from the container width.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      const w = entry?.contentRect.width ?? STAGE_W;
-      const next = stageScale(w, window.devicePixelRatio || 1);
-      setFit((prev) => (prev.deviceScale === next.deviceScale && prev.cssWidth === next.cssWidth ? prev : next));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   // A story restarts when the scene's story changes or Replay is pressed.
   useEffect(() => {

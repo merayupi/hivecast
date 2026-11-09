@@ -316,3 +316,12 @@ html, body { background: var(--hive-night); }
 @media (prefers-reduced-motion: reduce) {
   .hive-btn, .hud-tab, .sched-row { transition: none; }
 }
+
+/* ---- Season Replay ------------------------------------------------------ */
+.season-wrap { padding-bottom: 0; }
+.season { display: grid; gap: 0.6rem; }
+.env-offline { color: var(--hive-honey); }
+.race-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.race-controls .speed { display: flex; gap: 0.3rem; }
+.hive-btn.ghost.is-on { background: var(--hive-violet); border-color: var(--hive-honey); color: var(--hive-honey); }
+.scrub { flex: 1 1 200px; min-width: 0; accent-color: var(--hive-honey); }

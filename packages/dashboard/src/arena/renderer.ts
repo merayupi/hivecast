@@ -116,12 +116,12 @@ const ease = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : 1 - (1 - t) * (1 - t));
 const clamp01 = (t: number) => (t < 0 ? 0 : t > 1 ? 1 : t);
 const R = (n: number) => Math.round(n);
 
-function rect(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, c: string) {
+export function rect(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, c: string) {
   g.fillStyle = c;
   g.fillRect(R(x), R(y), w, h);
 }
 
-function text(g: CanvasRenderingContext2D, bank: SpriteBank, s: string, x: number, y: number, color: string, align: CanvasTextAlign = 'center', size = 8, shadow = true) {
+export function text(g: CanvasRenderingContext2D, bank: SpriteBank, s: string, x: number, y: number, color: string, align: CanvasTextAlign = 'center', size = 8, shadow = true) {
   g.font = bank.font.replace(/^\d+px/, `${size}px`);
   g.textAlign = align;
   g.textBaseline = 'top';
@@ -313,7 +313,7 @@ function drawTrack(g: CanvasRenderingContext2D, bank: SpriteBank) {
   text(g, bank, '100%', t.x1 + 4, t.y - 4, HIVE.ash, 'left');
 }
 
-function drawCharacter(
+export function drawCharacter(
   g: CanvasRenderingContext2D,
   bank: SpriteBank,
   agentId: string,
@@ -339,12 +339,38 @@ function drawCharacter(
     if (pose === 'idle') y -= Math.floor(loopMs / 640) % 2;
     if (pose === 'seal' || pose === 'reveal') y -= poseMs > 0 && poseMs < 400 ? 2 : 0;
     if (pose === 'win') y -= Math.floor(loopMs / 220) % 2 === 0 ? 2 : 0;
-    if (pose === 'lose') y += 1;
+    if (pose === 'lose' || pose === 'bankrupt') y += 1;
     g.drawImage(sprite.image, x, y, 24, 24);
     // The initial is drawn live so it stays sharp at any device scale.
     text(g, bank, sprite.spec.initial, x + 12, y + 7, sprite.spec.textColor, 'center', 11, false);
+    if (pose === 'bankrupt') drawGhost(g, x, y);
   }
   g.globalAlpha = 1;
+}
+
+/** Bankrupt placeholder: 50% ash dither over the body and a tiny skull. */
+function drawGhost(g: CanvasRenderingContext2D, x: number, y: number) {
+  g.fillStyle = HIVE.night;
+  for (let yy = 2; yy < 22; yy += 1) for (let xx = 2 + (yy % 2); xx < 22; xx += 2) g.fillRect(x + xx, y + yy, 1, 1);
+  drawSkull(g, x + 9, y - 7);
+}
+
+export function drawSkull(g: CanvasRenderingContext2D, x: number, y: number) {
+  rect(g, x, y, 6, 4, HIVE.wax);
+  rect(g, x + 1, y + 4, 4, 2, HIVE.wax);
+  rect(g, x + 1, y + 1, 1, 2, HIVE.ink);
+  rect(g, x + 4, y + 1, 1, 2, HIVE.ink);
+  rect(g, x + 2, y + 5, 1, 1, HIVE.ink);
+}
+
+export function drawCrown(g: CanvasRenderingContext2D, x: number, y: number) {
+  rect(g, x, y + 2, 9, 3, HIVE.honey);
+  rect(g, x, y, 1, 2, HIVE.honey);
+  rect(g, x + 4, y - 1, 1, 3, HIVE.honey);
+  rect(g, x + 8, y, 1, 2, HIVE.honey);
+  rect(g, x + 2, y + 3, 1, 1, HIVE.amber);
+  rect(g, x + 6, y + 3, 1, 1, HIVE.amber);
+  rect(g, x, y + 5, 9, 1, HIVE.amber);
 }
 
 function lerp(a: number, b: number, t: number) {

@@ -11,9 +11,21 @@ import { BankrollChart, BrierBars } from './SimCharts';
  * experiments (price / weather), honest cohorts/denominators, and a labelled
  * log-odds comparison — never presented as live chain activity.
  */
-export function SimulationPanel() {
+export function SimulationPanel({
+  domain: controlledDomain,
+  onDomain,
+  hideBankroll = false,
+}: {
+  /** Controlled domain (the Season Replay above shares it); defaults to local state. */
+  domain?: 'price' | 'weather';
+  onDomain?: (d: 'price' | 'weather') => void;
+  /** The Season Replay race replaces the bankroll chart. */
+  hideBankroll?: boolean;
+} = {}) {
   const { data, error, loading } = usePolling(() => api.simulation(), 60_000, []);
-  const [domain, setDomain] = useState<'price' | 'weather'>('price');
+  const [localDomain, setLocalDomain] = useState<'price' | 'weather'>('price');
+  const domain = controlledDomain ?? localDomain;
+  const setDomain = onDomain ?? setLocalDomain;
 
   if (loading) return <p className="muted-line">Loading simulation…</p>;
   if (error) return <ErrorNote message={error} />;
@@ -23,7 +35,7 @@ export function SimulationPanel() {
     <div className="simulation">
       <SimHead report={data} domain={domain} onDomain={setDomain} />
       <Verdict d={domain === 'price' ? data.price : data.weather} />
-      <BankrollChart d={domain === 'price' ? data.price : data.weather} />
+      {hideBankroll ? null : <BankrollChart d={domain === 'price' ? data.price : data.weather} />}
       <BrierBars d={domain === 'price' ? data.price : data.weather} />
       <DomainTable d={domain === 'price' ? data.price : data.weather} />
       <Availability report={data} />
