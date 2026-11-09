@@ -7,6 +7,7 @@
  */
 import { HIVE, STAGE_H, STAGE_W } from './palette';
 import type { Scene, SceneActor } from './scene';
+import { rosterIndex } from './personas';
 import { tagFrameAt, type CharacterSprite, type LoadedSheet } from './spriteSheet';
 
 export interface SpriteBank {
@@ -52,6 +53,52 @@ export function benchAnchor(i: number): { x: number; y: number } {
   const left = i % 2 === 0;
   const k = Math.floor(i / 2);
   return { x: left ? 16 + k * 26 : STAGE_W - 16 - k * 26, y: LAYOUT.benchFeetY };
+}
+
+export const SLOTS = 9;
+
+export interface SceneLayout {
+  /** Feet anchor per participant (same order as scene.actors). */
+  actors: { x: number; y: number }[];
+  /** Feet anchor per benched agent (same order as scene.bench). */
+  bench: { x: number; y: number }[];
+  /** Slot index per participant (label stagger); -1 in the packed fallback. */
+  actorSlots: number[];
+  /** Pedestals to draw: one per slot in the fixed layout (lit = participant). */
+  pedestals: { x: number; y: number; lit: boolean }[];
+  fixed: boolean;
+}
+
+/**
+ * Where everyone stands. Normally every roster agent owns one of the nine
+ * pedestals of the background's arc (slot = roster order): participants on
+ * a lit pedestal, agents sitting this Round out dimmed on their own dim one.
+ * If an agent is unknown (no slot) the packed centre arc + side bench is used.
+ */
+export function layoutScene(scene: Pick<Scene, 'actors' | 'bench'>): SceneLayout {
+  const slotOf = (id: string) => rosterIndex(id);
+  const all = [...scene.actors.map((a) => slotOf(a.agentId)), ...scene.bench.map((b) => slotOf(b.agentId))];
+  const fixed = all.every((s) => s >= 0 && s < SLOTS) && new Set(all).size === all.length;
+  if (fixed) {
+    const actorSlots = scene.actors.map((a) => slotOf(a.agentId));
+    const lit = new Set(actorSlots);
+    return {
+      fixed,
+      actorSlots,
+      actors: actorSlots.map((s) => actorAnchor(s, SLOTS)),
+      bench: scene.bench.map((b) => actorAnchor(slotOf(b.agentId), SLOTS)),
+      pedestals: Array.from({ length: SLOTS }, (_, s) => ({ ...actorAnchor(s, SLOTS), lit: lit.has(s) })),
+    };
+  }
+  const n = scene.actors.length;
+  const actors = scene.actors.map((_, i) => actorAnchor(i, n));
+  return {
+    fixed,
+    actorSlots: scene.actors.map(() => -1),
+    actors,
+    bench: scene.bench.map((_, i) => benchAnchor(i)),
+    pedestals: actors.map((a) => ({ ...a, lit: true })),
+  };
 }
 
 /** Envelope rects in the Lockbox row, one per participant (hover targets). */
@@ -404,7 +451,8 @@ export function drawScene(g: CanvasRenderingContext2D, bank: SpriteBank, scene: 
   }
 
   const n = scene.actors.length;
-  const anchors = scene.actors.map((_, i) => actorAnchor(i, n));
+  const layout = layoutScene(scene);
+  const anchors = layout.actors;
   const env = envelopeRects(n);
   const lockboxCenter = { x: 160, y: LAYOUT.lockbox.y + 10 };
 
@@ -418,9 +466,9 @@ export function drawScene(g: CanvasRenderingContext2D, bank: SpriteBank, scene: 
   if (scene.kind === 'observing' || scene.kind === 'awaiting-outcome') drawObserving(g, bank, scene);
 
   // Pedestals + bench.
-  anchors.forEach((a) => drawPedestal(g, bank, a.x, a.y, true));
+  layout.pedestals.forEach((p) => drawPedestal(g, bank, p.x, p.y, p.lit));
   scene.bench.forEach((b, i) => {
-    const a = benchAnchor(i);
+    const a = layout.bench[i]!;
     drawCharacter(g, bank, b.agentId, 'idle', a.x, a.y, 0, 0, true);
   });
 
@@ -474,7 +522,8 @@ export function drawScene(g: CanvasRenderingContext2D, bank: SpriteBank, scene: 
       const short = a.revealedBps !== null ? `${Math.round(a.revealedBps / 100)}%` : a.label.startsWith('NO REVEAL') ? 'NO REVEAL' : a.label === 'NOT REVEALED YET' ? '…' : a.label === 'SEALED' ? '' : a.label === 'REFUNDED' ? '' : a.label;
       if (short) {
         const color = a.result === 'win' ? HIVE.yes : a.result === 'lose' ? HIVE.alert : a.revealedBps !== null ? HIVE.wax : HIVE.ash;
-        text(g, bank, short, anchor.x, anchor.y - 34 - (i % 2) * 8, color);
+        const stagger = (layout.actorSlots[i]! >= 0 ? layout.actorSlots[i]! : i) % 2;
+        text(g, bank, short, anchor.x, anchor.y - 34 - stagger * 8, color);
       }
     }
 

@@ -290,3 +290,29 @@ test('stage scale is a whole number of device pixels per logical pixel (no resam
   assert.equal(phone.cssWidth, 320);
   assert.equal(stageScale(100, 1).deviceScale, 1, 'never below 1');
 });
+
+test('layout: every roster agent owns its pedestal slot; sitting-out agents stand dimmed on theirs', async () => {
+  const { layoutScene, actorAnchor, SLOTS } = await import('../src/arena/renderer');
+  const s = deriveScene({ question: q(4), comparison: cmp(4), roster, nowMs: T0 });
+  const l = layoutScene(s);
+  assert.equal(l.fixed, true);
+  assert.equal(l.pedestals.length, SLOTS);
+  // Slot = roster order: meteo 0 … llm-news 8. Yolo (index 6) stands on slot 6.
+  const yolo = s.actors.findIndex((a) => a.agentId === 'yolo');
+  assert.deepEqual(l.actors[yolo], actorAnchor(6, SLOTS));
+  const meteo = s.bench.findIndex((b) => b.agentId === 'meteo');
+  assert.deepEqual(l.bench[meteo], actorAnchor(0, SLOTS));
+  assert.deepEqual(l.pedestals.map((p) => p.lit), [false, false, true, true, true, true, true, true, false]);
+  // Anchors are unique, so nobody overlaps.
+  const xs = [...l.actors, ...l.bench].map((a) => a.x);
+  assert.equal(new Set(xs).size, xs.length);
+});
+
+test('layout: an unknown agent falls back to the packed arc + side bench', async () => {
+  const { layoutScene } = await import('../src/arena/renderer');
+  const s = deriveScene({ question: q(4), comparison: cmp(4), roster, nowMs: T0 });
+  const odd = { ...s, actors: [...s.actors, { ...s.actors[0]!, agentId: 'mystery', accountId: 'mystery.testnet' }] };
+  const l = layoutScene(odd);
+  assert.equal(l.fixed, false);
+  assert.equal(l.actors.length, 7);
+});

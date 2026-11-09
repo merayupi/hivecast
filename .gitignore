@@ -11,3 +11,6 @@ hivecast.config.json
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+
+# Python bytecode (art/src generators)
+__pycache__/

@@ -1,0 +1,227 @@
+{ "frames": [
+   {
+    "filename": "envelope-sealed-0",
+    "frame": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "envelope-open-0",
+    "frame": { "x": 33, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "coin-spin-0",
+    "frame": { "x": 66, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 90
+   },
+   {
+    "filename": "coin-spin-1",
+    "frame": { "x": 99, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 90
+   },
+   {
+    "filename": "coin-spin-2",
+    "frame": { "x": 132, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 90
+   },
+   {
+    "filename": "coin-spin-3",
+    "frame": { "x": 165, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 90
+   },
+   {
+    "filename": "dart-0",
+    "frame": { "x": 198, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "refund-token-0",
+    "frame": { "x": 231, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "skull-0",
+    "frame": { "x": 264, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "lock-0",
+    "frame": { "x": 297, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "lockbox-closed-0",
+    "frame": { "x": 330, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "lockbox-glow-0",
+    "frame": { "x": 363, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "oracle-stone-idle-0",
+    "frame": { "x": 396, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 200
+   },
+   {
+    "filename": "oracle-stone-idle-1",
+    "frame": { "x": 429, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 200
+   },
+   {
+    "filename": "oracle-stone-idle-2",
+    "frame": { "x": 462, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 200
+   },
+   {
+    "filename": "oracle-stone-idle-3",
+    "frame": { "x": 495, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 200
+   },
+   {
+    "filename": "pedestal-lit-0",
+    "frame": { "x": 528, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "pedestal-dim-0",
+    "frame": { "x": 561, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "candle-up-0",
+    "frame": { "x": 594, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "candle-down-0",
+    "frame": { "x": 627, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "rain-cloud-0",
+    "frame": { "x": 660, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   },
+   {
+    "filename": "sun-0",
+    "frame": { "x": 693, "y": 0, "w": 32, "h": 32 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 32, "h": 32 },
+    "sourceSize": { "w": 32, "h": 32 },
+    "duration": 100
+   }
+ ],
+ "meta": {
+  "app": "https://www.aseprite.org/",
+  "version": "1.3.18.6-x64",
+  "image": "props.png",
+  "format": "RGBA8888",
+  "size": { "w": 725, "h": 32 },
+  "scale": "1",
+  "frameTags": [
+   { "name": "envelope-sealed", "from": 0, "to": 0, "direction": "forward", "color": "#000000ff" },
+   { "name": "envelope-open", "from": 1, "to": 1, "direction": "forward", "color": "#000000ff" },
+   { "name": "coin-spin", "from": 2, "to": 5, "direction": "forward", "color": "#000000ff" },
+   { "name": "dart", "from": 6, "to": 6, "direction": "forward", "color": "#000000ff" },
+   { "name": "refund-token", "from": 7, "to": 7, "direction": "forward", "color": "#000000ff" },
+   { "name": "skull", "from": 8, "to": 8, "direction": "forward", "color": "#000000ff" },
+   { "name": "lock", "from": 9, "to": 9, "direction": "forward", "color": "#000000ff" },
+   { "name": "lockbox-closed", "from": 10, "to": 10, "direction": "forward", "color": "#000000ff" },
+   { "name": "lockbox-glow", "from": 11, "to": 11, "direction": "forward", "color": "#000000ff" },
+   { "name": "oracle-stone-idle", "from": 12, "to": 15, "direction": "forward", "color": "#000000ff" },
+   { "name": "pedestal-lit", "from": 16, "to": 16, "direction": "forward", "color": "#000000ff" },
+   { "name": "pedestal-dim", "from": 17, "to": 17, "direction": "forward", "color": "#000000ff" },
+   { "name": "candle-up", "from": 18, "to": 18, "direction": "forward", "color": "#000000ff" },
+   { "name": "candle-down", "from": 19, "to": 19, "direction": "forward", "color": "#000000ff" },
+   { "name": "rain-cloud", "from": 20, "to": 20, "direction": "forward", "color": "#000000ff" },
+   { "name": "sun", "from": 21, "to": 21, "direction": "forward", "color": "#000000ff" }
+  ]
+ }
+}

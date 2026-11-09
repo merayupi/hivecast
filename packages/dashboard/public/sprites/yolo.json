@@ -1,0 +1,208 @@
+{ "frames": [
+   {
+    "filename": "idle-0",
+    "frame": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 160
+   },
+   {
+    "filename": "idle-1",
+    "frame": { "x": 25, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 160
+   },
+   {
+    "filename": "idle-2",
+    "frame": { "x": 50, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 160
+   },
+   {
+    "filename": "idle-3",
+    "frame": { "x": 75, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 160
+   },
+   {
+    "filename": "seal-0",
+    "frame": { "x": 100, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 100
+   },
+   {
+    "filename": "seal-1",
+    "frame": { "x": 125, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 100
+   },
+   {
+    "filename": "seal-2",
+    "frame": { "x": 150, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 100
+   },
+   {
+    "filename": "seal-3",
+    "frame": { "x": 175, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 100
+   },
+   {
+    "filename": "reveal-0",
+    "frame": { "x": 200, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 100
+   },
+   {
+    "filename": "reveal-1",
+    "frame": { "x": 225, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 100
+   },
+   {
+    "filename": "reveal-2",
+    "frame": { "x": 250, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 100
+   },
+   {
+    "filename": "reveal-3",
+    "frame": { "x": 275, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 100
+   },
+   {
+    "filename": "win-0",
+    "frame": { "x": 300, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 110
+   },
+   {
+    "filename": "win-1",
+    "frame": { "x": 325, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 110
+   },
+   {
+    "filename": "win-2",
+    "frame": { "x": 350, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 110
+   },
+   {
+    "filename": "win-3",
+    "frame": { "x": 375, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 110
+   },
+   {
+    "filename": "lose-0",
+    "frame": { "x": 400, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 150
+   },
+   {
+    "filename": "lose-1",
+    "frame": { "x": 425, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 150
+   },
+   {
+    "filename": "lose-2",
+    "frame": { "x": 450, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 150
+   },
+   {
+    "filename": "bankrupt-0",
+    "frame": { "x": 475, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 300
+   },
+   {
+    "filename": "bankrupt-1",
+    "frame": { "x": 500, "y": 0, "w": 24, "h": 24 },
+    "rotated": false,
+    "trimmed": false,
+    "spriteSourceSize": { "x": 0, "y": 0, "w": 24, "h": 24 },
+    "sourceSize": { "w": 24, "h": 24 },
+    "duration": 300
+   }
+ ],
+ "meta": {
+  "app": "https://www.aseprite.org/",
+  "version": "1.3.18.6-x64",
+  "image": "yolo.png",
+  "format": "RGBA8888",
+  "size": { "w": 524, "h": 24 },
+  "scale": "1",
+  "frameTags": [
+   { "name": "idle", "from": 0, "to": 3, "direction": "forward", "color": "#000000ff" },
+   { "name": "seal", "from": 4, "to": 7, "direction": "forward", "color": "#000000ff" },
+   { "name": "reveal", "from": 8, "to": 11, "direction": "forward", "color": "#000000ff" },
+   { "name": "win", "from": 12, "to": 15, "direction": "forward", "color": "#000000ff" },
+   { "name": "lose", "from": 16, "to": 18, "direction": "forward", "color": "#000000ff" },
+   { "name": "bankrupt", "from": 19, "to": 20, "direction": "forward", "color": "#000000ff" }
+  ]
+ }
+}
