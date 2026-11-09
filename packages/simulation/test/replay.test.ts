@@ -39,7 +39,9 @@ interface ReportDomain {
   initialCapital: string;
   participants: string[];
   agents: ReportAgent[];
-  aggregates: Array<{ kind: string; brierMean: number; logOddsBrierMean: number }>;
+  aggregates: Array<{ kind: string; brierMean: number; logOddsBrierMean: number; logOddsClip: string }>;
+  baselines: Array<{ kind: string; rounds: number; brierMean: number }>;
+  series: { sampleEvery: number; labels: string[]; bankrolls: Record<string, string[]> };
 }
 interface Report {
   seed: number;
@@ -162,6 +164,35 @@ test('Brier means and log-odds pooled Brier both lie in [0,1]', () => {
         Number.isFinite(agg.logOddsBrierMean) && agg.logOddsBrierMean >= 0 && agg.logOddsBrierMean <= 1,
         `${agg.kind} log-odds-brier ${agg.logOddsBrierMean} in [0,1]`,
       );
+    }
+  }
+});
+
+test('baselines are scored on the aggregate Rounds; constant-50 is exactly 0.25', () => {
+  const r = runCli([]);
+  for (const domain of [r.price, r.weather]) {
+    const kinds = domain.baselines.map((b) => b.kind).sort();
+    assert.deepEqual(kinds, ['constant-50', 'running-base-rate']);
+    for (const b of domain.baselines) {
+      assert.equal(b.rounds, domain.roundsWithParticipants);
+      assert.ok(b.brierMean >= 0 && b.brierMean <= 1);
+    }
+    assert.equal(domain.baselines.find((b) => b.kind === 'constant-50')!.brierMean, 0.25);
+    for (const agg of domain.aggregates) assert.equal(agg.logOddsClip, '[0.01, 0.99]');
+  }
+});
+
+test('bankroll series starts at initial capital and ends at each final bankroll', () => {
+  const r = runCli([]);
+  for (const domain of [r.price, r.weather]) {
+    const { labels, bankrolls } = domain.series;
+    assert.equal(labels[0], 'start');
+    assert.ok(labels.length <= 241, `series is downsampled (${labels.length})`);
+    for (const a of domain.agents) {
+      const s = bankrolls[a.agentId]!;
+      assert.equal(s.length, labels.length);
+      assert.equal(s[0], domain.initialCapital);
+      assert.equal(s[s.length - 1], a.finalBankroll);
     }
   }
 });

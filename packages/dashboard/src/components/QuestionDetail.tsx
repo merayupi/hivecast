@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiClientError } from '../lib/api';
 import type { ForecastDeliveryDto, QuestionView } from '../lib/types';
-import { near, pct, nsDate, fmtDateTimeTz, domainTimeZone, questionDomain, sourceLabel, explorerTxUrl } from '../lib/format';
+import { near, pct, nsDate, fmtDateTimeTz, sourceTimeZone, questionDomain, sourceLabel, explorerTxUrl } from '../lib/format';
 import { PhaseLadder } from './PhaseLadder';
 import { Chip, DomainChip, SingleAgentMark, Stat, Panel, ErrorNote } from './ui';
 import type { WalletState } from '../lib/useWallet';
@@ -184,10 +184,10 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
       <PhaseLadder q={q} nowMs={nowMs} />
 
       <div className="detail-stats">
-        <Stat label="Query fee" value={`${near(q.access_price)} Ⓝ`} hint="one fixed fee per Question" />
-        <Stat label="Min stake" value={`${near(q.min_stake)} Ⓝ`} />
-        <Stat label="Total stake" value={`${near(q.total_stake)} Ⓝ`} />
-        <Stat label="Fee pool" value={`${near(q.fee_pool)} Ⓝ`} />
+        <Stat label="Query fee" value={`${near(q.access_price)} NEAR`} hint="one fixed fee per Question" />
+        <Stat label="Min stake" value={`${near(q.min_stake)} NEAR`} />
+        <Stat label="Total stake" value={`${near(q.total_stake)} NEAR`} />
+        <Stat label="Fee pool" value={`${near(q.fee_pool)} NEAR`} />
         <Stat label="Participants" value={String(q.participant_count)} />
         <Stat label="Buyers" value={String(q.buyer_count)} />
       </div>
@@ -195,7 +195,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
       <dl className="detail-facts">
         <Fact k="Source" v={sourceLabel(q.source)} />
         <Fact k="Resolver" v={q.resolver} />
-        <Fact k="Observation" v={`${fmtDateTimeTz(q.observation_start, domainTimeZone(questionDomain(q.source)))} → ${fmtDateTimeTz(q.observation_end, domainTimeZone(questionDomain(q.source)))}`} />
+        <Fact k="Observation" v={`${fmtDateTimeTz(q.observation_start, sourceTimeZone(q.source))} → ${fmtDateTimeTz(q.observation_end, sourceTimeZone(q.source))}`} />
         <Fact k="Snapshot id" v={q.snapshot_id ?? 'not published'} />
         {q.outcome !== null ? (
           <Fact k="Outcome" v={q.outcome ? 'YES' : 'NO'} />
@@ -209,7 +209,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
           <div className="access-owned">
             <p>
               <span className="chip text-state-ok">Purchased</span>
-              <span className="muted-line num"> paid {near(receipt.price)} Ⓝ · {receipt.refunded ? 'refunded' : 'not refunded'}</span>
+              <span className="muted-line num"> paid {near(receipt.price)} NEAR · {receipt.refunded ? 'refunded' : 'not refunded'}</span>
             </p>
             {delivery ? (
               <div className="forecast-reveal">
@@ -226,7 +226,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
                 <button type="button" className="btn btn-ghost" onClick={claimRefund} disabled={busy !== null}>
                   {busy === 'claim' ? 'Signing…' : 'Claim buyer refund'}
                 </button>
-                <p className="muted-line small-caps">Eligible when the Round is cancelled or settled with zero Valid Revealers; the contract enforces eligibility.</p>
+                <p className="muted-line">Eligible when the Round is cancelled or settled with zero Valid Revealers; the contract enforces eligibility.</p>
               </div>
             ) : null}
             {wallet.status !== 'authenticated' ? (
@@ -236,12 +236,12 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
         ) : saleOpen ? (
           <div className="access-buy">
             <p className="muted-line">
-              Purchase is exact-once: {near(q.access_price)} Ⓝ for this frozen Forecast Snapshot. Wrong amount,
+              Purchase is exact-once: {near(q.access_price)} NEAR for this frozen Forecast Snapshot. Wrong amount,
               duplicate, or out-of-window purchases are rejected on-chain. Sale closes at{' '}
-              {fmtDateTimeTz(q.observation_start, domainTimeZone(questionDomain(q.source)))}.
+              {fmtDateTimeTz(q.observation_start, sourceTimeZone(q.source))}.
             </p>
             <button type="button" className="btn btn-vermilion" onClick={buy} disabled={busy !== null || !canBuy}>
-              {busy === 'buy' ? 'Signing…' : `Buy for ${near(q.access_price)} Ⓝ`}
+              {busy === 'buy' ? 'Signing…' : `Buy for ${near(q.access_price)} NEAR`}
             </button>
           </div>
         ) : (
@@ -255,7 +255,7 @@ export function QuestionDetail({ q, wallet }: { q: QuestionView; wallet: WalletS
                   : 'This forecast is not for sale (snapshot not ready or window passed).'}
           </p>
         )}
-        {pendingTx ? <p className="muted-line small-caps">Waiting for the transaction to finalize…</p> : null}
+        {pendingTx ? <p className="muted-line">Waiting for the transaction to finalize…</p> : null}
         {fetchError ? <ErrorNote message={fetchError} /> : null}
       </Panel>
     </div>

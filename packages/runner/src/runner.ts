@@ -17,6 +17,8 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { getStrategy, supportsDomain } from '@hivecast/core';
+import { forecastWithLlm } from './llm.js';
+import type { FetchLike } from './llm.js';
 import type { AgentId, Domain, StrategyContext, StrategyInputs } from '@hivecast/core';
 import { commitmentHash, generateSalt } from './commitment.js';
 import type { ChainClient, TxFinalStatusView } from './chain/types.js';
@@ -27,7 +29,7 @@ import {
   parseSourceSpec,
   priceTargetLabel,
   weatherTargetLabel,
-  wibDateOfUtcMs,
+  localDateOfUtcMs,
 } from './schedule.js';
 import {
   fetchCompletedCandles,
@@ -89,6 +91,13 @@ export interface CreateQuestionSpec {
   resolveTimeNs: bigint;
   resolveDeadlineNs: bigint;
   revealWindowNs: bigint;
+}
+
+/** A weather Question's target date in its own city's time zone. */
+function weatherLocalDate(q: LocalQuestion): string {
+  const spec = parseSourceSpec(q.sourceJson);
+  const tz = spec.kind === 'weather' ? spec.timezone : 'UTC';
+  return localDateOfUtcMs(nsToMs(q.observationStartNs) + 3_600_000, tz);
 }
 
 function serializeCreateSpec(spec: CreateQuestionSpec): string {
@@ -157,18 +166,19 @@ export class LiveSourceProvider implements SourceProvider {
         disclosure: JSON.stringify(evidence),
       };
     }
-    const targetDate = wibDateOfUtcMs(nsToMs(q.observationStartNs));
+    // Local calendar date in the city's own time zone (+1 h guards the exact midnight instant).
+    const obsStartMs = nsToMs(q.observationStartNs);
+    const targetDate = localDateOfUtcMs(obsStartMs + 3_600_000, spec.timezone);
     const { forecastPrecipMm, evidence } = await fetchWeatherForecast(bases, spec, targetDate);
     const historyPrecipMm: string[] = [];
     const missing: string[] = [];
-    // History = past WIB days whose observation window FULLY ended before the
+    // History = past local days whose observation window FULLY ended before the
     // commitment cutoff. The most recent completed day is the day before the
-    // target day's predecessor (target D, cutoff D-1 23:55 WIB, so D-1 has not
+    // target day's predecessor (target D, cutoff D-1 23:55 local, so D-1 has not
     // ended yet); therefore start at i=2 (D-2 and older), never the still-open
     // local day.
     for (let i = 2; i <= WEATHER_HISTORY_DAYS + 1; i++) {
-      const d = new Date(nsToMs(q.observationStartNs) - i * 86_400_000);
-      const date = wibDateOfUtcMs(d.getTime());
+      const date = localDateOfUtcMs(obsStartMs - i * 86_400_000 + 12 * 3_600_000, spec.timezone);
       try {
         const res = await fetchWeatherHistoryDay(bases, spec, date);
         historyPrecipMm.push(res.precipitationMm);
@@ -191,7 +201,7 @@ export class LiveSourceProvider implements SourceProvider {
       const res = await fetchPriceResolution(bases, spec, nsToMs(q.observationStartNs), nsToMs(this.nowNs()));
       return { outcome: res.outcome, evidenceJson: JSON.stringify(res.evidence), evidenceHash: res.evidence.hash };
     }
-    const res = await fetchWeatherResolution(bases, spec, wibDateOfUtcMs(nsToMs(q.observationStartNs)));
+    const res = await fetchWeatherResolution(bases, spec, localDateOfUtcMs(nsToMs(q.observationStartNs) + 3_600_000, spec.timezone));
     return { outcome: res.outcome, evidenceJson: JSON.stringify(res.evidence), evidenceHash: res.evidence.hash };
   }
 
@@ -218,20 +228,74 @@ export class Runner {
   }
 
   private agentAccount(agentId: AgentId): string {
-    return this.config.agentAccounts[agentId];
+    const account = this.config.agentAccounts[agentId];
+    if (!account) throw new Error(`no account configured for agent ${agentId}`);
+    return account;
+  }
+
+  /** The live-only LLM agent joins only when it has both an account and an LLM config. */
+  private llmEnabled(): boolean {
+    return Boolean(this.config.llm && this.config.agentAccounts['llm-news']);
   }
 
   /** Domain-relevant agents (spec §8), deterministic order. */
   private participantsFor(domain: Domain): { agentId: AgentId; accountId: string }[] {
     const order = ['meteo', 'climatology', 'persistence', 'momentum', 'meanrev', 'noisy-trend', 'yolo', 'coinflip'] as AgentId[];
+    if (this.llmEnabled()) order.push('llm-news');
     return order.filter((id) => supportsDomain(id, domain)).map((id) => ({ agentId: id, accountId: this.agentAccount(id) }));
+  }
+
+  /** Injectable for tests; defaults to global fetch. */
+  fetchFn: FetchLike = (url, init) => fetch(url, init);
+
+  /**
+   * llm-news forecast: sized BEFORE the (paid) LLM call so a broke agent never
+   * spends credits, capped at `maxAttempts` per Round, and every attempt is
+   * stored privately before anything is committed.
+   */
+  private async llmForecast(
+    q: LocalQuestion,
+    accountId: string,
+    inputs: StrategyInputs,
+  ): Promise<{ kind: 'forecast'; probabilityBps: number } | { kind: 'abstain'; reason: string }> {
+    const cfg = this.config.llm;
+    if (!cfg) return { kind: 'abstain', reason: 'llm-not-configured' };
+    if (inputs.kind !== 'price') return { kind: 'abstain', reason: 'unsupported-domain' };
+    if (this.store.countLlmRuns(q.questionId, accountId) >= cfg.maxAttempts) {
+      return { kind: 'abstain', reason: 'llm-attempts-exhausted' };
+    }
+    const available = await this.availableForStake(accountId);
+    if (available / STAKE_FLOOR_DENOM < this.config.minStakeYocto) {
+      return { kind: 'abstain', reason: 'below-minimum-stake' };
+    }
+    const nowMs = Number(this.nowNs() / 1_000_000n);
+    const result = await forecastWithLlm(this.fetchFn, cfg, q.text, inputs.candles, nowMs);
+    const r = result.record;
+    this.store.saveLlmRun({
+      questionId: q.questionId,
+      accountId,
+      model: r.model,
+      promptSha256: r.promptSha256,
+      headlines: r.headlines,
+      probBps: r.probabilityBps,
+      rationale: r.rationale,
+      promptTokens: r.usage?.promptTokens ?? null,
+      completionTokens: r.usage?.completionTokens ?? null,
+      error: r.error,
+      createdAtMs: nowMs,
+    });
+    const tokens = r.usage ? ` tokens=${r.usage.promptTokens}+${r.usage.completionTokens}` : '';
+    process.stdout.write(
+      `[llm-news] q${q.questionId} ${result.kind === 'forecast' ? `p=${result.probabilityBps}bps` : `abstain:${result.reason} ${r.error ?? ''}`}${tokens}\n`,
+    );
+    return result.kind === 'forecast' ? { kind: 'forecast', probabilityBps: result.probabilityBps } : { kind: 'abstain', reason: result.reason };
   }
 
   private strategyContext(q: LocalQuestion, agentId: AgentId, inputs: StrategyInputs): StrategyContext {
     const targetTime =
       q.domain === 'price'
         ? priceTargetLabel(nsToMs(q.observationStartNs))
-        : weatherTargetLabel(wibDateOfUtcMs(nsToMs(q.observationStartNs)));
+        : weatherTargetLabel(weatherLocalDate(q));
     return { agentId, domain: q.domain, targetTime, roundKey: `${q.domain}:${q.questionId}`, inputs, seed: this.config.seed };
   }
 
@@ -440,7 +504,10 @@ export class Runner {
         // No durable forecast and no available source: cannot commit now.
         return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: 'inputs-unavailable', error: null };
       }
-      const result = getStrategy(agentId)(this.strategyContext(q, agentId, inputs));
+      const result =
+        agentId === 'llm-news'
+          ? await this.llmForecast(q, accountId, inputs)
+          : getStrategy(agentId)(this.strategyContext(q, agentId, inputs));
       if (result.kind === 'abstain') {
         return { kind: 'commit', questionId: q.questionId, accountId, sent: false, reason: `abstain:${result.reason}`, error: null };
       }
@@ -690,7 +757,7 @@ export class Runner {
     const seen = new Set<string>();
     for (const id of Object.keys(this.config.agentAccounts) as AgentId[]) {
       const accountId = this.config.agentAccounts[id];
-      if (seen.has(accountId)) continue;
+      if (!accountId || seen.has(accountId)) continue;
       seen.add(accountId);
       const step = await this.withdrawAccount(accountId);
       if (step) steps.push(step);

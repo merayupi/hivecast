@@ -33,14 +33,14 @@ import { createServer as createNetServer } from 'node:net';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 
 import { Account, JsonRpcProvider, KeyPair, actions, nearToYocto } from 'near-api-js';
-import type { AgentId } from '@hivecast/core';
+import type { AgentId, AlgoAgentId } from '@hivecast/core';
 
 import { NearChainClient } from '../src/chain/near.js';
 import type { RunnerConfig } from '../src/config.js';
 import { Runner } from '../src/runner.js';
 import { Store } from '../src/store.js';
 import { SandboxChainBase } from './sandbox-chain.js';
-import { wibDateOfUtcMs, msToNs, nsToMs, MS_PER_HOUR, MS_PER_DAY, MS_PER_MIN, computeWeatherSchedule, computePriceSchedule, hourFloorUtc } from '../src/schedule.js';
+import { DEFAULT_WEATHER_CITIES, wibDateOfUtcMs, msToNs, nsToMs, MS_PER_HOUR, MS_PER_DAY, MS_PER_MIN, computeWeatherSchedule, computePriceSchedule, hourFloorUtc } from '../src/schedule.js';
 import type { LocalQuestion } from '../src/types.js';
 
 const WASM_PATH = process.env.HIVECAST_WASM ?? 'contracts/hivecast/target/wasm32-unknown-unknown/release/hivecast.wasm';
@@ -318,7 +318,7 @@ async function callFunction(
   return null;
 }
 
-function buildAgentAccounts(accts: Map<string, string>): Record<AgentId, string> {
+function buildAgentAccounts(accts: Map<string, string>): Record<AlgoAgentId, string> {
   return {
     meteo: accts.get('meteo')!,
     climatology: accts.get('climatology')!,
@@ -435,9 +435,7 @@ async function main(): Promise<void> {
         binanceBaseUrl: fixture.base,
         openMeteoBaseUrl: fixture.base,
         archiveBaseUrl: fixture.base,
-        kudusLatitude: '-6.8049',
-        kudusLongitude: '110.8397',
-        kudusTimezone: 'Asia/Jakarta',
+        weatherCities: DEFAULT_WEATHER_CITIES.map((c) => ({ ...c })),
         operationalGasReserveYocto: 0n,
         http: { enabled: false, host: '127.0.0.1', port: 8787 },
         access: {
@@ -483,8 +481,8 @@ async function main(): Promise<void> {
       const sourceJson = JSON.stringify({
         kind: 'weather',
         model: 'ecmwf_ifs',
-        latitude: '-6.8049',
-        longitude: '110.8397',
+        latitude: '-6.2088',
+        longitude: '106.8456',
         timezone: 'Asia/Jakarta',
         threshold_mm: '1.0',
       });
@@ -514,7 +512,7 @@ async function main(): Promise<void> {
         text: 'Weather boundary fixture',
         eventDefinition: 'Open-Meteo ECMWF IFS 9km daily precipitation_sum >= 1.0 mm',
         sourceJson,
-        sourceLabel: 'Open-Meteo ECMWF IFS 9km Kudus',
+        sourceLabel: 'Open-Meteo ECMWF IFS 9km Jakarta',
         resolver: resolver.accountId,
         openTimeNs: schedule.openTimeNs,
         closeTimeNs: schedule.closeTimeNs,

@@ -20,8 +20,10 @@ Two independent experiments, each starting every agent at 100 NEAR:
 
 - **Price** — 1440 hourly Binance `NEARUSDT` candles, 2026-08-01..2026-09-29 UTC.
   Outcome YES when `close > open` (exact decimal compare). 168-candle (7-day) warm-up.
-- **Weather** — 60 daily Kudus precipitation outcomes (Open-Meteo ECMWF IFS 9 km,
-  `Asia/Jakarta`), threshold 1.0 mm. 365-day warm-up.
+- **Weather** — 60 daily Jakarta precipitation outcomes (Open-Meteo ECMWF IFS 9 km,
+  `Asia/Jakarta`), threshold 1.0 mm. 365-day warm-up. Refresh the bundle with
+  `npm run fetch-data` (needs network); the report names the location from the
+  bundle manifest.
 
 Six relevant strategies per domain (see `@hivecast/core`); unsupported specialists
 abstain. Stake sizing is `floor(10% × Available Balance)`, skipped without rounding

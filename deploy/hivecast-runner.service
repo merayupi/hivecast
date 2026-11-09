@@ -1,0 +1,19 @@
+# Autonomous agent scheduler: creates Questions, commits, publishes snapshots,
+# resolves, reveals and settles. Needs the testnet credential directory.
+[Unit]
+Description=HiveCast agent runner (testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hivecast
+WorkingDirectory=/opt/hivecast/packages/runner
+Environment=HIVECAST_CONFIG=/etc/hivecast/hivecast.config.json
+# NEARAI_API_KEY=... for the LLM agent (file readable by the hivecast user only)
+EnvironmentFile=-/etc/hivecast/hivecast.env
+ExecStart=/usr/bin/npm run cli -- run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

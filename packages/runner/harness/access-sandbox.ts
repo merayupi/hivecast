@@ -46,6 +46,7 @@ import { createServer as createNetServer } from 'node:net';
 import { Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, nearToYocto } from 'near-api-js';
 
 import { NearChainClient } from '../src/chain/near.js';
+import { DEFAULT_WEATHER_CITIES } from '../src/schedule.js';
 import { commitmentHash, generateSalt } from '../src/commitment.js';
 import type { RunnerConfig } from '../src/config.js';
 import { Runner } from '../src/runner.js';
@@ -472,9 +473,7 @@ async function main(): Promise<void> {
         binanceBaseUrl: 'https://api.binance.com',
         openMeteoBaseUrl: 'https://api.open-meteo.com',
         archiveBaseUrl: 'https://archive-api.open-meteo.com',
-        kudusLatitude: '-6.8049',
-        kudusLongitude: '110.8397',
-        kudusTimezone: 'Asia/Jakarta',
+        weatherCities: DEFAULT_WEATHER_CITIES.map((c) => ({ ...c })),
         operationalGasReserveYocto: 0n,
         rpcTimeoutMs: 30_000,
         http: { enabled: false, host: '127.0.0.1', port: 8787 },

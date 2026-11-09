@@ -169,9 +169,9 @@ export function BalancePanel({
       ) : (
         <>
           <div className="balance-stats">
-            <Stat label="Claimable" value={`${near(balance.claimable)} Ⓝ`} hint="entitled, not yet withdrawn" />
-            <Stat label="Pending" value={`${near(balance.pending)} Ⓝ`} hint="in-flight transfer" />
-            <Stat label="Received" value={`${near(balance.received)} Ⓝ`} hint="delivered funds" />
+            <Stat label="Claimable" value={`${near(balance.claimable)} NEAR`} hint="entitled, not yet withdrawn" />
+            <Stat label="Pending" value={`${near(balance.pending)} NEAR`} hint="in-flight transfer" />
+            <Stat label="Received" value={`${near(balance.received)} NEAR`} hint="delivered funds" />
           </div>
 
           <div className="balance-actions">
@@ -183,7 +183,7 @@ export function BalancePanel({
             >
               {busy === 'withdraw' ? 'Signing…' : inFlight ? 'Finalizing…' : 'Withdraw claimable'}
             </button>
-            <p className="muted-line small-caps">Buyer refunds are claimed per Question (see the Round's access panel).</p>
+            <p className="muted-line">Buyer refunds are claimed per Question (see the Round's access panel).</p>
           </div>
 
           {pending.length > 0 ? (
@@ -192,7 +192,7 @@ export function BalancePanel({
               {pending.map((w) => (
                 <div key={w.nonce} className="pending-row num">
                   <span>#{w.nonce}</span>
-                  <span>{near(w.amount)} Ⓝ</span>
+                  <span>{near(w.amount)} NEAR</span>
                   <span className={`chip ${w.status === 'delivered' ? 'text-state-ok' : w.status === 'restored' ? 'text-state-warn' : 'text-ink-500'}`}>
                     {w.status}
                   </span>
@@ -202,7 +202,7 @@ export function BalancePanel({
           ) : null}
         </>
       )}
-      {inFlight ? <p className="muted-line small-caps">Waiting for the transfer to finalize…</p> : null}
+      {inFlight ? <p className="muted-line">Waiting for the transfer to finalize…</p> : null}
       {error ? <ErrorNote message={error} /> : null}
     </Panel>
   );

@@ -108,6 +108,7 @@ contract calls; the service never impersonates a buyer.
 | `/analytics/leaderboard` | GET | global Brier leaderboard (lower better, coverage = valid Reveals; no per-account balances) |
 | `/analytics/economics` | GET | live account economics: bankroll/available/locked/claimable/pending/received, wagering P&L, Query-Fee income, actual gas — all separate |
 | `/questions/:id/comparison` | GET | per-Question comparison (probabilities/scores public only after final Outcome) |
+| `/questions/:id/rationale` | GET | `llm-news` headlines + rationale, only after that agent's on-chain Reveal (403 `not_revealed` before; 404 when not configured / not a participant) |
 | `/simulation/report` | GET | deterministic offline replay report (reused from `@hivecast/simulation`) |
 
 ### Forecast Access auth (ticket #5)
@@ -252,8 +253,10 @@ npm run sandbox:source --workspace @hivecast/runner                  # Linux: re
   (`openTime == target`, `closeTime == openTime + 1h − 1ms`, the INCLUSIVE
   Binance interval end) and completed status before deriving `close > open`
   (ties/lower = NO) with exact decimal strings.
-- **Weather** — Open-Meteo `ecmwf_ifs` (ECMWF IFS 9 km) at Kudus
-  (`-6.8049,110.8397`), `Asia/Jakarta`; forecast `precipitation_sum` fetched
+- **Weather** — Open-Meteo `ecmwf_ifs` (ECMWF IFS 9 km), one Question per
+  city per local day for every entry in `weatherCities` (default Jakarta,
+  Singapore, London, Dubai, Tokyo); each Question pins the city's coordinates
+  and IANA time zone in its `source_json`; forecast `precipitation_sum` fetched
   before the cutoff (per-run publication time not documented → availability
   `inference`, disclosed); resolution from `archive-api.open-meteo.com/v1/archive`;
   outcome `precipitation_sum >= 1.0 mm`.
@@ -263,3 +266,38 @@ npm run sandbox:source --workspace @hivecast/runner                  # Linux: re
   `resolve_deadline`, then the Round is cancelled; missing history days are
   recorded in the input disclosure, not silently dropped. Every fetch persists
   exact evidence (raw response + hash + model/grid/units/timestamp).
+
+## Live-only LLM agent (`llm-news`)
+
+Optional. Create and fund the sub-account once (testnet only; writes its key to
+`credentialDirectory`, never prints it):
+
+```bash
+npm run setup:llm-account -- 20     # 20 NEAR from the operator
+```
+
+Then add the account and an `llm` block to `hivecast.config.json`:
+
+```json
+"agentAccounts": { "...": "...", "llm-news": "llm-news.hivecast-1105-0548.testnet" },
+"llm": {
+  "baseUrl": "https://cloud-api.near.ai/v1",
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "apiKeyEnv": "NEARAI_API_KEY",
+  "providerLabel": "NEAR AI Cloud · private TEE inference"
+}
+```
+
+- The key comes from the env var named by `apiKeyEnv` (default `NEARAI_API_KEY`),
+  or `llm.apiKey` in the git-ignored config. It is never logged or served.
+- Price domain only. Per Round: fetch headlines published before now from the
+  RSS feeds in `llm.newsFeeds` (CoinDesk, Cointelegraph, Decrypt by default),
+  summarise the last 24 completed candles, ask the model for
+  `{"probability": 0-100, "rationale": "..."}`, validate strictly.
+- Stake is sized before the call, so an agent below the minimum never spends
+  credits. At most `llm.maxAttempts` (default 3) calls per Round; a timeout or
+  invalid reply is an abstention, never a guessed number.
+- Every attempt (model, prompt SHA-256, headlines, reply, token usage) is stored
+  privately before the commit and released through `/questions/:id/rationale`
+  only after the on-chain Reveal.
+- Not part of `npm run sim`: the replay is offline and deterministic by design.

@@ -1,0 +1,18 @@
+# HiveCast public deployment (testnet) — one origin, so the HttpOnly session
+# cookie works without CORS. Replace hivecast.example.com with your domain;
+# Caddy fetches the HTTPS certificate automatically.
+hivecast.example.com {
+	encode zstd gzip
+
+	# Runner public HTTP service. The dashboard calls /api/*; strip the prefix.
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	# Built dashboard (packages/dashboard/dist), single-page app fallback.
+	handle {
+		root * /opt/hivecast/packages/dashboard/dist
+		try_files {path} /index.html
+		file_server
+	}
+}

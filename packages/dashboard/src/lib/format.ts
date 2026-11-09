@@ -30,10 +30,10 @@ export function pct(bps: number): string {
   return `${whole}.${frac}%`;
 }
 
-/** Format a Brier error in [0,1] as a percentage with 1 decimal (lower better). */
+/** Format a Brier error in [0,1] as a 3-decimal score (lower better; 0.250 = always-50%). */
 export function brier(b: number | null): string {
   if (b === null) return '—';
-  return `${(b * 100).toFixed(1)}%`;
+  return b.toFixed(3);
 }
 
 /** UTC nanoseconds decimal string -> Date. */
@@ -41,8 +41,8 @@ export function nsDate(ns: string): Date {
   return new Date(Number(BigInt(ns) / NS_PER_MS));
 }
 
-/** Human date-time in a specific IANA timezone (price=UTC, weather=WIB). */
-export function fmtDateTimeTz(ns: string, timeZone: 'UTC' | 'Asia/Jakarta'): string {
+/** Human date-time in a specific IANA timezone (price=UTC, weather=the city's own zone). */
+export function fmtDateTimeTz(ns: string, timeZone: string): string {
   return nsDate(ns).toLocaleString('en-GB', {
     year: 'numeric',
     month: 'short',
@@ -62,7 +62,7 @@ export function fmtDateTimeTz(ns: string, timeZone: 'UTC' | 'Asia/Jakarta'): str
  */
 export function fmtDateParts(
   ns: string,
-  timeZone: 'UTC' | 'Asia/Jakarta',
+  timeZone: string,
 ): { date: string; time: string } {
   const d = nsDate(ns);
   const date = d.toLocaleDateString('en-GB', {
@@ -83,8 +83,37 @@ export function fmtDateParts(
 }
 
 /** The event's declared timezone for a domain. */
-export function domainTimeZone(domain: Domain): 'UTC' | 'Asia/Jakarta' {
+export function domainTimeZone(domain: Domain): string {
   return domain === 'price' ? 'UTC' : 'Asia/Jakarta';
+}
+
+function parseSource(source: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The time zone a Question's schedule is read in: UTC for price, the city's own zone for weather. */
+export function sourceTimeZone(source: string): string {
+  const p = parseSource(source);
+  if (p?.kind === 'weather' && typeof p.timezone === 'string') return p.timezone;
+  return domainTimeZone(questionDomain(source));
+}
+
+/** City name pinned in a weather Question's source, if any. */
+export function sourceCity(source: string): string | null {
+  const p = parseSource(source);
+  return p?.kind === 'weather' && typeof p.city === 'string' ? p.city : null;
+}
+
+/** One-line meta under a Round in the list. */
+export function questionMeta(source: string): string {
+  if (questionDomain(source) === 'price') return domainLabel('price');
+  const city = sourceCity(source);
+  return city ? `Weather · ${city} · IFS 9km` : domainLabel('weather');
 }
 
 /**
@@ -112,9 +141,10 @@ export function sourceLabel(source: string): string {
     }
     if (typeof parsed.kind === 'string' && parsed.kind === 'weather') {
       const model = String(parsed.model ?? 'ecmwf_ifs');
-      const lat = String(parsed.latitude ?? '-6.8049');
-      const lon = String(parsed.longitude ?? '110.8397');
-      return `Open-Meteo ${model} precipitation_sum at ${lat},${lon} (grid model, not a station)`;
+      const lat = String(parsed.latitude ?? '?');
+      const lon = String(parsed.longitude ?? '?');
+      const where = typeof parsed.city === 'string' ? `${parsed.city} (${lat},${lon})` : `${lat},${lon}`;
+      return `Open-Meteo ${model} precipitation_sum at ${where}, ${String(parsed.timezone ?? '')} local day (grid model, not a station)`;
     }
   } catch {
     // raw string
@@ -147,7 +177,7 @@ export function countdown(ns: string, nowMs: number = Date.now()): Countdown {
 
 /** Domain label for the two experiments. */
 export function domainLabel(domain: Domain): string {
-  return domain === 'price' ? 'Price · Binance NEARUSDT 1h' : 'Weather · Kudus IFS 9km';
+  return domain === 'price' ? 'Price · Binance NEARUSDT 1h' : 'Weather · Open-Meteo IFS 9km';
 }
 
 /** Shorten an account id for tight columns; full id stays in a title/attr. */

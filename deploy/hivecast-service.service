@@ -1,0 +1,18 @@
+# Public HTTP service (read-only views, Forecast Access auth/delivery).
+[Unit]
+Description=HiveCast public HTTP service (testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hivecast
+WorkingDirectory=/opt/hivecast/packages/runner
+Environment=HIVECAST_CONFIG=/etc/hivecast/hivecast.config.json
+# NEARAI_API_KEY=... for the LLM agent (file readable by the hivecast user only)
+EnvironmentFile=-/etc/hivecast/hivecast.env
+ExecStart=/usr/bin/npm run service
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -42,6 +42,8 @@ export interface WeatherBundle {
 export interface Manifest {
   bundleVersion: number;
   generatedAt: string;
+  /** Human-readable weather location (bundles fetched before it existed omit it). */
+  weatherLocation?: string;
   evalPeriod: {
     start: string;
     end: string;

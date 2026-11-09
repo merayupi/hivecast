@@ -40,7 +40,29 @@ export interface AgentRosterEntry {
   accountId: string;
   domains: readonly string[];
   role: string;
+  /** Live-only identities never appear in the offline replay. */
+  liveOnly?: boolean;
 }
+
+/**
+ * llm-news rationale, public ONLY after the agent's on-chain Reveal (before
+ * that it would leak the private forecast). No key, salt, or raw prompt.
+ */
+export interface LlmRationaleDto {
+  question_id: number;
+  account_id: string;
+  model: string;
+  provider: string;
+  revealed_prob_bps: number;
+  rationale: string;
+  headlines: { title: string; source: string; published_at: string }[];
+  prompt_sha256: string;
+  matches_reveal: boolean;
+}
+
+export type LlmRationaleResult =
+  | { status: 'ok'; rationale: LlmRationaleDto }
+  | { status: 'not_configured' | 'no_commitment' | 'not_revealed' | 'unavailable' };
 
 /** Snapshot aggregate DTO — the product sold via Forecast Access. No secrets. */
 export interface SnapshotDto {
@@ -182,7 +204,7 @@ export class Runtime {
    * ids. Account ids are on-chain public; no keys, salts, or forecasts.
    */
   getAgentRoster(): AgentRosterEntry[] {
-    return (AGENT_IDS as readonly AgentId[]).map((agentId) => ({
+    const algo: AgentRosterEntry[] = (AGENT_IDS as readonly AgentId[]).map((agentId) => ({
       agentId,
       accountId: this.config.agentAccounts[agentId] ?? '',
       domains: STRATEGY_DOMAINS[agentId],
@@ -193,6 +215,45 @@ export class Runtime {
             ? 'price'
             : 'both',
     }));
+    const llmAccount = this.config.agentAccounts['llm-news'];
+    if (llmAccount && this.config.llm) {
+      algo.push({ agentId: 'llm-news', accountId: llmAccount, domains: STRATEGY_DOMAINS['llm-news'], role: 'price', liveOnly: true });
+    }
+    return algo;
+  }
+
+  /**
+   * The LLM agent's headlines + rationale for one Round, released only once
+   * its commitment is revealed on chain (the reveal makes the probability
+   * public anyway; the rationale explains it).
+   */
+  async getLlmRationale(questionId: number): Promise<LlmRationaleResult> {
+    const accountId = this.config.agentAccounts['llm-news'];
+    if (!accountId || !this.config.llm) return { status: 'not_configured' };
+    let commitment;
+    try {
+      commitment = await this.chain.getCommitment(questionId, accountId);
+    } catch {
+      return { status: 'unavailable' };
+    }
+    if (!commitment) return { status: 'no_commitment' };
+    if (commitment.revealed === null || commitment.revealed === undefined) return { status: 'not_revealed' };
+    const run = this.store.getLlmRun(questionId, accountId);
+    if (!run || run.rationale === null || run.probBps === null) return { status: 'unavailable' };
+    return {
+      status: 'ok',
+      rationale: {
+        question_id: questionId,
+        account_id: accountId,
+        model: run.model,
+        provider: this.config.llm.providerLabel,
+        revealed_prob_bps: commitment.revealed,
+        rationale: run.rationale,
+        headlines: run.headlines.map((h) => ({ title: h.title, source: h.source, published_at: new Date(h.publishedAtMs).toISOString() })),
+        prompt_sha256: run.promptSha256,
+        matches_reveal: run.probBps === commitment.revealed,
+      },
+    };
   }
 
   // -------------------------------------------------------------------------

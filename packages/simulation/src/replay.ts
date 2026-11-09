@@ -94,6 +94,24 @@ export interface AggregateSummary {
   logOddsClip: string;
 }
 
+export interface BaselineSummary {
+  domain: Domain;
+  /** constant-50: always forecast 50%. running-base-rate: past YES frequency (Laplace-smoothed, no look-ahead). */
+  kind: 'constant-50' | 'running-base-rate';
+  rounds: number;
+  brierMean: number;
+}
+
+/**
+ * Bankroll trajectory for charting: bankroll of every participant after each
+ * sampled Round (yoctoNEAR decimal strings). Point 0 is the initial capital.
+ */
+export interface BankrollSeries {
+  sampleEvery: number;
+  labels: string[];
+  bankrolls: Record<string, string[]>;
+}
+
 export interface DomainResult {
   domain: Domain;
   seed: number;
@@ -103,6 +121,8 @@ export interface DomainResult {
   peakLockedStake: string;
   agents: AgentSummary[];
   aggregates: AggregateSummary[];
+  baselines: BaselineSummary[];
+  series: BankrollSeries;
   participants: AgentId[];
 }
 
@@ -116,6 +136,8 @@ export interface ReplayReport {
     evalPeriod: { start: string; end: string };
     priceRounds: number;
     weatherRounds: number;
+    /** Where the weather replay is located, from the bundle manifest (or its coordinates). */
+    weatherLocation: string;
   };
   availability: Array<{ id: string; availability: string; availableAt: string | null; note: string }>;
   price: DomainResult;
@@ -207,8 +229,14 @@ function brierFloat(probabilityBps: number, outcome: 0 | 10_000): number {
   return d * d;
 }
 
+/** Log-odds clip: 1%..99%, so a 0%/100% forecast cannot dominate the pooled logit. */
+export const LOG_ODDS_CLIP = 0.01;
+export const LOG_ODDS_CLIP_LABEL = '[0.01, 0.99]';
+/** Max points per bankroll series (keeps the JSON report small). */
+const MAX_SERIES_POINTS = 240;
+
 function clampProbability(p: number): number {
-  return Math.max(1e-9, Math.min(1 - 1e-9, p));
+  return Math.max(LOG_ODDS_CLIP, Math.min(1 - LOG_ODDS_CLIP, p));
 }
 
 /**
@@ -269,6 +297,17 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
   const aggRounds: Array<{ eqBrier: number; swBrier: number; eqLoBrier: number; swLoBrier: number }> = [];
   let roundsWithParticipants = 0;
   let peakLocked = 0n;
+
+  // Baselines (scored on the same Rounds as the aggregates).
+  let baseRateYes = 0;
+  let baseRateSeen = 0;
+  const baselineRounds: Array<{ c50: number; rate: number }> = [];
+
+  // Bankroll series (sampled).
+  const sampleEvery = Math.max(1, Math.ceil(rounds.length / MAX_SERIES_POINTS));
+  const seriesLabels: string[] = ['start'];
+  const seriesBankrolls: Record<string, string[]> = {};
+  for (const a of participants) seriesBankrolls[a] = [config.initialCapital.toString()];
 
   for (const round of rounds) {
     const roundParticipants: Array<{
@@ -359,6 +398,19 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
         eqLoBrier: (eqPooled - o) * (eqPooled - o),
         swLoBrier: (swPooled - o) * (swPooled - o),
       });
+
+      const rate = (baseRateYes + 1) / (baseRateSeen + 2);
+      baselineRounds.push({ c50: (0.5 - o) * (0.5 - o), rate: (rate - o) * (rate - o) });
+    }
+
+    // The base rate learns from every resolved Round, after it is scored.
+    baseRateSeen += 1;
+    if (round.outcome === 10_000) baseRateYes += 1;
+
+    const idx = rounds.indexOf(round) + 1;
+    if (idx % sampleEvery === 0 || idx === rounds.length) {
+      seriesLabels.push(round.targetTime);
+      for (const a of participants) seriesBankrolls[a]!.push(bankroll.get(a)!.toString());
     }
   }
 
@@ -381,8 +433,17 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
     const eqLoMean = aggRounds.reduce((a, r) => a + r.eqLoBrier, 0) / n;
     const swLoMean = aggRounds.reduce((a, r) => a + r.swLoBrier, 0) / n;
     aggregates.push(
-      { domain, kind: 'equal-weight', rounds: n, brierMean: eqMean, logOddsBrierMean: eqLoMean, logOddsClip: '[1e-9, 1-1e-9]' },
-      { domain, kind: 'stake-weighted', rounds: n, brierMean: swMean, logOddsBrierMean: swLoMean, logOddsClip: '[1e-9, 1-1e-9]' },
+      { domain, kind: 'equal-weight', rounds: n, brierMean: eqMean, logOddsBrierMean: eqLoMean, logOddsClip: LOG_ODDS_CLIP_LABEL },
+      { domain, kind: 'stake-weighted', rounds: n, brierMean: swMean, logOddsBrierMean: swLoMean, logOddsClip: LOG_ODDS_CLIP_LABEL },
+    );
+  }
+
+  const baselines: BaselineSummary[] = [];
+  if (baselineRounds.length > 0) {
+    const n = baselineRounds.length;
+    baselines.push(
+      { domain, kind: 'constant-50', rounds: n, brierMean: baselineRounds.reduce((a, r) => a + r.c50, 0) / n },
+      { domain, kind: 'running-base-rate', rounds: n, brierMean: baselineRounds.reduce((a, r) => a + r.rate, 0) / n },
     );
   }
 
@@ -395,6 +456,8 @@ function replayDomain(domain: Domain, rounds: RoundSpec[], config: ReplayConfig)
     peakLockedStake: peakLocked.toString(),
     agents: [...summary.values()],
     aggregates,
+    baselines,
+    series: { sampleEvery, labels: seriesLabels, bankrolls: seriesBankrolls },
     participants,
   };
 }
@@ -416,6 +479,8 @@ export function runReplay(bundle: Bundle, config: ReplayConfig): ReplayReport {
       evalPeriod: { start: bundle.manifest.evalPeriod.start, end: bundle.manifest.evalPeriod.end },
       priceRounds: priceRoundsList.length,
       weatherRounds: weatherRoundsList.length,
+      weatherLocation:
+        bundle.manifest.weatherLocation ?? `lat ${bundle.weather.latitude}, lon ${bundle.weather.longitude}`,
     },
     availability: bundle.manifest.sources.map((s) => ({
       id: s.id,

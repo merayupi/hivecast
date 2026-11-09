@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { NearChainClient } from '../src/chain/index.js';
+import { DEFAULT_WEATHER_CITIES } from '../src/schedule.js';
 import type { RunnerConfig } from '../src/config.js';
 import { Runner } from '../src/runner.js';
 import { Runtime } from '../src/runtime.js';
@@ -55,9 +56,7 @@ function configJson(dbPath: string): string {
     binanceBaseUrl: 'https://api.binance.com',
     openMeteoBaseUrl: 'https://api.open-meteo.com',
     archiveBaseUrl: 'https://archive-api.open-meteo.com',
-    kudusLatitude: '-6.8049',
-    kudusLongitude: '110.8397',
-    kudusTimezone: 'Asia/Jakarta',
+    weatherCities: DEFAULT_WEATHER_CITIES.map((c) => ({ ...c })),
     http: { enabled: false, host: '127.0.0.1', port: 8787 },
     access: {
       sessionTtlMs: 86400000,
@@ -92,9 +91,7 @@ function buildConfig(dbPath: string): RunnerConfig {
     binanceBaseUrl: 'https://api.binance.com',
     openMeteoBaseUrl: 'https://api.open-meteo.com',
     archiveBaseUrl: 'https://archive-api.open-meteo.com',
-    kudusLatitude: '-6.8049',
-    kudusLongitude: '110.8397',
-    kudusTimezone: 'Asia/Jakarta',
+    weatherCities: DEFAULT_WEATHER_CITIES.map((c) => ({ ...c })),
     operationalGasReserveYocto: 0n,
     rpcTimeoutMs: 15_000,
     http: { enabled: false, host: '127.0.0.1', port: 8787 },

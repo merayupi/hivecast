@@ -1,5 +1,5 @@
 import type { QuestionView } from '../lib/types';
-import { countdown, fmtDateParts, fmtDateTimeTz, domainTimeZone, questionDomain } from '../lib/format';
+import { countdown, fmtDateParts, fmtDateTimeTz, sourceTimeZone, questionDomain } from '../lib/format';
 
 interface Milestone {
   key: string;
@@ -37,7 +37,7 @@ export function PhaseLadder({ q, nowMs }: { q: QuestionView; nowMs: number }) {
     if (BigInt(ns) <= nowNs) active = i;
   }
   const terminal = q.phase === 'settled' || q.phase === 'cancelled';
-  const tz = domainTimeZone(questionDomain(q.source));
+  const tz = sourceTimeZone(q.source);
 
   return (
     <div className="phase-ladder">
@@ -75,7 +75,7 @@ function PhaseNow({
   q: QuestionView;
   revealed: boolean;
   nowMs: number;
-  tz: 'UTC' | 'Asia/Jakarta';
+  tz: string;
 }) {
   if (q.phase === 'settled' || q.phase === 'cancelled') {
     return (

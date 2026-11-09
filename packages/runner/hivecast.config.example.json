@@ -14,17 +14,62 @@
   "operationalGasReserveYocto": "50000000000000000000000",
   "binanceBaseUrl": "https://api.binance.com",
   "openMeteoBaseUrl": "https://api.open-meteo.com",
-  "kudusLatitude": "-6.8049",
-  "kudusLongitude": "110.8397",
-  "kudusTimezone": "Asia/Jakarta",
-  "http": { "enabled": false, "host": "127.0.0.1", "port": 8787 },
+  "weatherCities": [
+    {
+      "id": "jakarta",
+      "name": "Jakarta",
+      "country": "Indonesia",
+      "latitude": "-6.2088",
+      "longitude": "106.8456",
+      "timezone": "Asia/Jakarta"
+    },
+    {
+      "id": "singapore",
+      "name": "Singapore",
+      "country": "Singapore",
+      "latitude": "1.3521",
+      "longitude": "103.8198",
+      "timezone": "Asia/Singapore"
+    },
+    {
+      "id": "london",
+      "name": "London",
+      "country": "United Kingdom",
+      "latitude": "51.5074",
+      "longitude": "-0.1278",
+      "timezone": "Europe/London"
+    },
+    {
+      "id": "dubai",
+      "name": "Dubai",
+      "country": "United Arab Emirates",
+      "latitude": "25.2048",
+      "longitude": "55.2708",
+      "timezone": "Asia/Dubai"
+    },
+    {
+      "id": "tokyo",
+      "name": "Tokyo",
+      "country": "Japan",
+      "latitude": "35.6762",
+      "longitude": "139.6503",
+      "timezone": "Asia/Tokyo"
+    }
+  ],
+  "http": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8787
+  },
   "access": {
     "sessionTtlMs": 86400000,
     "challengeTtlMs": 300000,
     "cookieName": "hivecast_session",
     "cookieSecure": false,
     "serviceDomain": "hivecast",
-    "allowedOrigins": ["http://localhost:5173"]
+    "allowedOrigins": [
+      "http://localhost:5173"
+    ]
   },
   "agentAccounts": {
     "meteo": "meteo.hivecast-1105-0548.testnet",
@@ -34,6 +79,14 @@
     "meanrev": "meanrev.hivecast-1105-0548.testnet",
     "noisy-trend": "noisy-trend.hivecast-1105-0548.testnet",
     "yolo": "yolo.hivecast-1105-0548.testnet",
-    "coinflip": "coinflip.hivecast-1105-0548.testnet"
+    "coinflip": "coinflip.hivecast-1105-0548.testnet",
+    "llm-news": "llm-news.hivecast-1105-0548.testnet"
+  },
+  "llm": {
+    "enabled": true,
+    "baseUrl": "https://cloud-api.near.ai/v1",
+    "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "apiKeyEnv": "NEARAI_API_KEY",
+    "providerLabel": "NEAR AI Cloud · private TEE inference"
   }
 }

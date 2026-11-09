@@ -10,7 +10,7 @@
 export type Domain = 'price' | 'weather';
 
 /** Eight algorithmic agent identities (per spec §8). */
-export type AgentId =
+export type AlgoAgentId =
   | 'meteo'
   | 'climatology'
   | 'persistence'
@@ -19,6 +19,15 @@ export type AgentId =
   | 'noisy-trend'
   | 'yolo'
   | 'coinflip';
+
+/**
+ * Live-only identities: they need the network (e.g. an LLM call) at forecast
+ * time, so they run in the live runner only and never in the offline replay.
+ */
+export type LiveAgentId = 'llm-news';
+
+/** Every identity the runner may operate. */
+export type AgentId = AlgoAgentId | LiveAgentId;
 
 /** Forecast probability expressed in basis points: integer 0..=10000. */
 export type ProbabilityBps = number;
@@ -102,10 +111,11 @@ export const STRATEGY_DOMAINS: Readonly<Record<AgentId, readonly Domain[]>> = {
   'noisy-trend': ['price', 'weather'],
   yolo: ['price', 'weather'],
   coinflip: ['price', 'weather'],
+  'llm-news': ['price'],
 } as const;
 
-/** All eight identities. */
-export const AGENT_IDS: readonly AgentId[] = [
+/** The eight algorithmic identities (the offline replay uses exactly these). */
+export const AGENT_IDS: readonly AlgoAgentId[] = [
   'meteo',
   'climatology',
   'persistence',
@@ -115,6 +125,13 @@ export const AGENT_IDS: readonly AgentId[] = [
   'yolo',
   'coinflip',
 ] as const;
+
+/** Live-only identities (never in the replay; optional in the runner config). */
+export const LIVE_AGENT_IDS: readonly LiveAgentId[] = ['llm-news'] as const;
+
+export function isLiveAgent(agentId: AgentId): agentId is LiveAgentId {
+  return (LIVE_AGENT_IDS as readonly string[]).includes(agentId);
+}
 
 export function supportsDomain(agentId: AgentId, domain: Domain): boolean {
   return (STRATEGY_DOMAINS[agentId] as readonly Domain[]).includes(domain);

@@ -1,5 +1,5 @@
 /**
- * Source fetchers (Binance NEARUSDT 1h candles, Open-Meteo IFS 9 km Kudus daily
+ * Source fetchers (Binance NEARUSDT 1h candles, Open-Meteo IFS 9 km per-city daily
  * precipitation). No silent substitution: the instrument/model/grid/timezone is
  * pinned per Question (parsed from its on-chain `source_json`), never read from
  * mutable global config. Every fetch returns full evidence (request URL, model,

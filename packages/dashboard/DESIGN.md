@@ -19,7 +19,8 @@ A ruled ledger: iron-black ink and one rubric vermilion on unbleached bone. Ever
 - **Display/headings**: Iowan Old Style → Palatino → Georgia → serif stack (`--font-display`), 600 weight, −0.02em tracking, max ~1.4rem on-screen.
 - **Body/UI**: system sans stack (`--font-sans`).
 - **Data/money/measurement**: `SFMono-Regular` → ui-monospace → monospace (`--font-mono`) with `font-variant-numeric: tabular-nums` — yoctoNEAR figures, timestamps, hashes, Brier numbers. The mono face is for data, not "technical" costume.
-- Small-caps apparatus labels (`.small-caps`, 0.72rem, +0.08em) for column heads, section kickers, and trust-note captions.
+- Apparatus labels (`.small-caps`: uppercase, 0.68rem, 600, +0.08em) for column heads and section kickers. Plain uppercase rather than `font-variant-caps`, because synthesized small caps render with mixed letter sizes on fonts without real small-cap glyphs. Long notes stay in sentence case.
+- Money is written `0.01 NEAR`, not with a currency glyph.
 
 ## Component Language
 
@@ -32,9 +33,12 @@ A ruled ledger: iron-black ink and one rubric vermilion on unbleached bone. Ever
 - **Phase ladder** (signature): 6-column detent track; done = iron, now = vermilion with a square pointer; collapses to 3 columns under 720px.
 - **Focus/selection/browser-drawn parts**: 1.5px vermilion focus outline, vermilion text selection, square (unrounded) scrollbar thumbs tinted from ink. The browser chrome is themed, not left default.
 
+- **Charts** (`SimCharts.tsx`, plain SVG): the bankroll race draws every agent in ink with direct end labels, the richest agent as the one vermilion line, and agents that can no longer stake dashed; identity never depends on colour. The accuracy chart puts the paid swarm forecast in vermilion and the naive baselines as dashed outlines. Both have a hover readout.
+- **Intro**: a one-sentence display-serif pitch above the live view; with no Round selected, the detail column explains a Round, how to try it on testnet, and the replay scoreboard.
+
 ## Density & Layout
 
-- Max width 1280px, 1.5rem gutters; live view = list (min 340px) + detail grid, collapsing to single column under 900px. Detail/balance/forecast grids collapse to 1 column under 480px. Mobile 390px has no horizontal overflow (verified).
+- Max width 1280px, 1.5rem gutters; live view = list (min 340px) + detail grid, collapsing to single column under 900px. Detail/balance/forecast grids collapse to 1 column under 480px. Mobile 390px has no page-level horizontal overflow; wide ledgers and charts scroll inside their own frame.
 - Tight groups, generous separation; more space above a heading than below.
 
 ## Motion

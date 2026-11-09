@@ -1,0 +1,92 @@
+{
+  "networkId": "testnet",
+  "contractId": "hivecast-market-6c4d.testnet",
+  "operatorId": "hivecast-1105-0548.testnet",
+  "resolverId": "hivecast-1105-0548.testnet",
+  "rpcUrl": "https://rpc.testnet.fastnear.com",
+  "credentialDirectory": "/etc/hivecast/near-credentials/testnet",
+  "databasePath": "/var/lib/hivecast/hivecast-runner.sqlite",
+  "seed": 42,
+  "pollIntervalMs": 60000,
+  "rpcTimeoutMs": 15000,
+  "minStakeYocto": "100000000000000000000000",
+  "accessPriceYocto": "10000000000000000000000",
+  "operationalGasReserveYocto": "50000000000000000000000",
+  "binanceBaseUrl": "https://api.binance.com",
+  "openMeteoBaseUrl": "https://api.open-meteo.com",
+  "weatherCities": [
+    {
+      "id": "jakarta",
+      "name": "Jakarta",
+      "country": "Indonesia",
+      "latitude": "-6.2088",
+      "longitude": "106.8456",
+      "timezone": "Asia/Jakarta"
+    },
+    {
+      "id": "singapore",
+      "name": "Singapore",
+      "country": "Singapore",
+      "latitude": "1.3521",
+      "longitude": "103.8198",
+      "timezone": "Asia/Singapore"
+    },
+    {
+      "id": "london",
+      "name": "London",
+      "country": "United Kingdom",
+      "latitude": "51.5074",
+      "longitude": "-0.1278",
+      "timezone": "Europe/London"
+    },
+    {
+      "id": "dubai",
+      "name": "Dubai",
+      "country": "United Arab Emirates",
+      "latitude": "25.2048",
+      "longitude": "55.2708",
+      "timezone": "Asia/Dubai"
+    },
+    {
+      "id": "tokyo",
+      "name": "Tokyo",
+      "country": "Japan",
+      "latitude": "35.6762",
+      "longitude": "139.6503",
+      "timezone": "Asia/Tokyo"
+    }
+  ],
+  "http": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "access": {
+    "sessionTtlMs": 86400000,
+    "challengeTtlMs": 300000,
+    "cookieName": "hivecast_session",
+    "cookieSecure": true,
+    "serviceDomain": "hivecast",
+    "allowedOrigins": [
+      "https://hivecast.example.com"
+    ]
+  },
+  "agentAccounts": {
+    "meteo": "meteo.hivecast-1105-0548.testnet",
+    "climatology": "climatology.hivecast-1105-0548.testnet",
+    "persistence": "persistence.hivecast-1105-0548.testnet",
+    "momentum": "momentum.hivecast-1105-0548.testnet",
+    "meanrev": "meanrev.hivecast-1105-0548.testnet",
+    "noisy-trend": "noisy-trend.hivecast-1105-0548.testnet",
+    "yolo": "yolo.hivecast-1105-0548.testnet",
+    "coinflip": "coinflip.hivecast-1105-0548.testnet",
+    "llm-news": "llm-news.hivecast-1105-0548.testnet"
+  },
+  "llm": {
+    "enabled": true,
+    "baseUrl": "https://cloud-api.near.ai/v1",
+    "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "apiKeyEnv": "NEARAI_API_KEY",
+    "providerLabel": "NEAR AI Cloud · private TEE inference"
+  }
+}

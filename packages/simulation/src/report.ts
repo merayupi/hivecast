@@ -63,6 +63,9 @@ function domainTable(header: string, d: DomainResult): string {
       `${agg.kind.padEnd(14)} brier=${agg.brierMean.toFixed(6)}  log-odds-brier=${agg.logOddsBrierMean.toFixed(6)} (clip ${agg.logOddsClip})`,
     );
   }
+  for (const b of d.baselines) {
+    lines.push(`baseline ${b.kind.padEnd(18)} brier=${b.brierMean.toFixed(6)}`);
+  }
   lines.push('');
   return lines.join('\n');
 }
@@ -74,13 +77,14 @@ export function renderTable(report: ReplayReport): string {
   lines.push(`initial capital ${report.config.initialCapitalNear} NEAR / agent, stake floor ${report.config.stakeFloor} of Available Balance, min stake ${report.config.minStakeNear} NEAR, query fee ${report.config.queryFeeNear} NEAR`);
   lines.push('');
   lines.push(domainTable('PRICE (Binance NEARUSDT 1h)', report.price));
-  lines.push(domainTable('WEATHER (Kudus IFS precipitation)', report.weather));
+  lines.push(domainTable(`WEATHER (${report.config.weatherLocation}, IFS precipitation)`, report.weather));
   lines.push('== INPUT AVAILABILITY DISCLOSURE ==');
   for (const a of report.availability) {
     lines.push(`- [${a.availability}] ${a.id}${a.availableAt ? ` (available_at: ${a.availableAt})` : ''}`);
   }
   lines.push('');
-  lines.push('log-odds-brier is a labelled simulation comparison: probabilities are pooled in log-odds space (weighted mean of logits, equal or stake weights) then inverse-logit\u2019d and scored with ordinary Brier; probability clipped to [1e-9, 1-1e-9]. It is not the paid probability-space aggregate.');
+  lines.push('log-odds-brier is a labelled simulation comparison: probabilities are pooled in log-odds space (weighted mean of logits, equal or stake weights) then inverse-logit\u2019d and scored with ordinary Brier; probability clipped to [0.01, 0.99]. It is not the paid probability-space aggregate.');
+  lines.push('Baselines: constant-50 always forecasts 50%; running-base-rate forecasts the past YES frequency (Laplace-smoothed, no look-ahead). Lower Brier is better.');
   return lines.join('\n');
 }
 

@@ -3,7 +3,7 @@
  *
  * Timestamps are UTC nanoseconds (`bigint`). Timezone handling is explicit:
  *   - price  : UTC hour boundaries (Binance kline `closeTime`, ms UTC)
- *   - weather: `Asia/Jakarta` (WIB, UTC+7, no DST) day boundaries
+ *   - weather: each city's local calendar day (IANA time zone, DST-aware)
  *
  * The schedule parameters follow the plan's default table (HIVECAST_PLAN.md §2).
  */
@@ -22,10 +22,72 @@ export const WIB_OFFSET_MS = 7 * MS_PER_HOUR; // UTC+7, no DST
 export const PRICE_INSTRUMENT = 'NEARUSDT';
 export const PRICE_INTERVAL = '1h';
 export const WEATHER_MODEL = 'ecmwf_ifs'; // ECMWF IFS 9 km — the pinned resolution model
-export const KUDUS_LAT = '-6.8049';
-export const KUDUS_LON = '110.8397';
-export const WEATHER_TIMEZONE = 'Asia/Jakarta';
 export const WEATHER_THRESHOLD_MM = '1.0';
+
+/** A city whose daily rain the weather domain forecasts. */
+export interface WeatherCity {
+  /** Stable id used in target keys, e.g. `jakarta`. Lowercase letters, digits, dashes. */
+  id: string;
+  name: string;
+  country: string;
+  latitude: string;
+  longitude: string;
+  /** IANA time zone: the local day is the observation window. */
+  timezone: string;
+}
+
+/**
+ * Default cities: contrasting climates so weather skill is visible (Singapore
+ * rains most days, Dubai almost never). Coordinates are city centres; the
+ * Outcome is the ECMWF IFS 9 km grid cell nearest each point.
+ */
+export const DEFAULT_WEATHER_CITIES: readonly WeatherCity[] = [
+  { id: 'jakarta', name: 'Jakarta', country: 'Indonesia', latitude: '-6.2088', longitude: '106.8456', timezone: 'Asia/Jakarta' },
+  { id: 'singapore', name: 'Singapore', country: 'Singapore', latitude: '1.3521', longitude: '103.8198', timezone: 'Asia/Singapore' },
+  { id: 'london', name: 'London', country: 'United Kingdom', latitude: '51.5074', longitude: '-0.1278', timezone: 'Europe/London' },
+  { id: 'dubai', name: 'Dubai', country: 'United Arab Emirates', latitude: '25.2048', longitude: '55.2708', timezone: 'Asia/Dubai' },
+  { id: 'tokyo', name: 'Tokyo', country: 'Japan', latitude: '35.6762', longitude: '139.6503', timezone: 'Asia/Tokyo' },
+];
+
+// ---------------------------------------------------------------------------
+// Time-zone helpers (Intl, so DST is handled, e.g. Europe/London)
+// ---------------------------------------------------------------------------
+
+/** Local calendar date (YYYY-MM-DD) of a UTC instant in an IANA time zone. */
+export function localDateOfUtcMs(utcMs: number, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(utcMs));
+}
+
+/** Offset (ms) of `timeZone` from UTC at `utcMs` (positive east of UTC). */
+function zoneOffsetMs(utcMs: number, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(utcMs));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return asUtc - Math.floor(utcMs / 1000) * 1000;
+}
+
+/** UTC ms of 00:00 local time on `date` (YYYY-MM-DD) in `timeZone`. */
+export function zonedMidnightUtc(date: string, timeZone: string): number {
+  const naive = Date.parse(`${date}T00:00:00Z`);
+  // Two passes settle the offset even across a DST change.
+  let guess = naive - zoneOffsetMs(naive, timeZone);
+  guess = naive - zoneOffsetMs(guess, timeZone);
+  return guess;
+}
+
+/** The calendar date after `date` (YYYY-MM-DD). */
+export function nextDate(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + MS_PER_DAY).toISOString().slice(0, 10);
+}
 
 export const DEFAULT_MIN_STAKE = 100_000_000_000_000_000_000_000n; // 0.1 NEAR
 export const DEFAULT_ACCESS_PRICE = 10_000_000_000_000_000_000_000n; // 0.01 NEAR
@@ -69,18 +131,17 @@ export function computePriceSchedule(targetHourStartMs: number): Schedule {
 }
 
 /**
- * Weather schedule for a WIB target date. Observation is the WIB day
- * (00:00 WIB → 00:00 WIB next day). Commitment opens 18:00 WIB the previous
- * day and closes 23:55 WIB; resolution deadline is 48 h after observation end.
- * `targetDateWibMs` is the UTC ms of 00:00 WIB on the target date.
+ * Weather schedule for one local day. Observation is local 00:00 → next local
+ * 00:00 (`obsEndMs` defaults to 24 h later; pass it on DST-change days).
+ * Commitment opens 6 h before (18:00 local the previous evening) and closes
+ * 5 min before (23:55 local); resolution deadline is 48 h after observation end.
  */
-export function computeWeatherSchedule(targetDateWibMs: number): Schedule {
-  const obsStart = targetDateWibMs;
-  const obsEnd = obsStart + MS_PER_DAY;
-  const prevDay = obsStart - MS_PER_DAY;
+export function computeWeatherSchedule(obsStartMs: number, obsEndMs?: number): Schedule {
+  const obsStart = obsStartMs;
+  const obsEnd = obsEndMs ?? obsStart + MS_PER_DAY;
   return {
-    openTimeNs: msToNs(prevDay + 18 * MS_PER_HOUR),
-    closeTimeNs: msToNs(prevDay + 23 * MS_PER_HOUR + 55 * MS_PER_MIN),
+    openTimeNs: msToNs(obsStart - 6 * MS_PER_HOUR),
+    closeTimeNs: msToNs(obsStart - 5 * MS_PER_MIN),
     observationStartNs: msToNs(obsStart),
     observationEndNs: msToNs(obsEnd),
     resolveTimeNs: msToNs(obsEnd),
@@ -105,7 +166,11 @@ export function wibMidnightUtc(nowMs: number): number {
 }
 
 /** Build the machine-readable `source` string stored on-chain. */
-export function sourceDefinition(domain: Domain, targetLabel: string): SourceDefinition {
+export function sourceDefinition(
+  domain: Domain,
+  targetLabel: string,
+  city: WeatherCity = DEFAULT_WEATHER_CITIES[0]!,
+): SourceDefinition {
   if (domain === 'price') {
     const json = JSON.stringify({
       kind: 'price',
@@ -118,25 +183,28 @@ export function sourceDefinition(domain: Domain, targetLabel: string): SourceDef
   const json = JSON.stringify({
     kind: 'weather',
     model: WEATHER_MODEL,
-    latitude: KUDUS_LAT,
-    longitude: KUDUS_LON,
-    timezone: WEATHER_TIMEZONE,
+    city: city.name,
+    city_id: city.id,
+    country: city.country,
+    latitude: city.latitude,
+    longitude: city.longitude,
+    timezone: city.timezone,
     threshold_mm: WEATHER_THRESHOLD_MM,
-    outcome: `precipitation_sum >= ${WEATHER_THRESHOLD_MM} mm for ${targetLabel} (${WEATHER_TIMEZONE})`,
+    outcome: `precipitation_sum >= ${WEATHER_THRESHOLD_MM} mm for ${targetLabel} (${city.timezone})`,
   });
   return {
     kind: 'weather',
     json,
-    label: `Open-Meteo ${WEATHER_MODEL} daily precipitation_sum at Kudus (${WEATHER_TIMEZONE})`,
+    label: `Open-Meteo ${WEATHER_MODEL} daily precipitation_sum at ${city.name}, ${city.country} (${city.timezone})`,
   };
 }
 
 /** Human-readable question text for a domain/target. */
-export function questionText(domain: Domain, targetLabel: string): string {
+export function questionText(domain: Domain, targetLabel: string, city: WeatherCity = DEFAULT_WEATHER_CITIES[0]!): string {
   if (domain === 'price') {
     return `Will ${PRICE_INSTRUMENT} close higher than it opened for the ${targetLabel} UTC hour?`;
   }
-  return `Will Kudus receive at least ${WEATHER_THRESHOLD_MM} mm of precipitation on ${targetLabel} (${WEATHER_TIMEZONE})?`;
+  return `Will ${city.name} (${city.country}) receive at least ${WEATHER_THRESHOLD_MM} mm of rain on ${targetLabel} (local date, ${city.timezone})?`;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,8 +215,9 @@ export function priceTargetKey(hourStartMs: number): string {
   return `price:${hourStartMs}`;
 }
 
-export function weatherTargetKey(date: string): string {
-  return `weather:${date}`;
+/** One weather Question per (city, local date). */
+export function weatherTargetKey(date: string, cityId: string): string {
+  return `weather:${cityId}:${date}`;
 }
 
 /** WIB date (YYYY-MM-DD) of a UTC ms timestamp. */
@@ -180,6 +249,8 @@ export interface PriceSourceSpec {
 export interface WeatherSourceSpec {
   kind: 'weather';
   model: string;
+  /** Display name; absent on Questions created before multi-city support. */
+  city: string | null;
   latitude: string;
   longitude: string;
   timezone: string;
@@ -212,12 +283,18 @@ export function parseSourceSpec(sourceJson: string): SourceSpec {
     };
   }
   if (o.kind === 'weather') {
+    // A weather Question always pins its own grid point and time zone; never
+    // fall back to a global default (that would silently move the location).
+    if (o.latitude === undefined || o.longitude === undefined || o.timezone === undefined) {
+      throw new Error('weather sourceJson must pin latitude, longitude and timezone');
+    }
     return {
       kind: 'weather',
       model: String(o.model ?? WEATHER_MODEL),
-      latitude: String(o.latitude ?? KUDUS_LAT),
-      longitude: String(o.longitude ?? KUDUS_LON),
-      timezone: String(o.timezone ?? WEATHER_TIMEZONE),
+      city: typeof o.city === 'string' ? o.city : null,
+      latitude: String(o.latitude),
+      longitude: String(o.longitude),
+      timezone: String(o.timezone),
       thresholdMm: String(o.threshold_mm ?? WEATHER_THRESHOLD_MM),
     };
   }

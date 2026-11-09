@@ -208,6 +208,15 @@ function coinflip(ctx: StrategyContext): ForecastResult {
   return { kind: 'forecast', probabilityBps: Math.floor(draw * 10_001) };
 }
 
+/**
+ * llm-news is live-only: its forecast comes from an async LLM call in the
+ * runner. The pure (synchronous, offline) registry always abstains for it, so
+ * the replay can never fabricate an LLM forecast.
+ */
+function liveOnly(): ForecastResult {
+  return { kind: 'abstain', reason: 'live-only' };
+}
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -221,6 +230,7 @@ export const STRATEGIES: Readonly<Record<AgentId, Strategy>> = {
   'noisy-trend': noisyTrend,
   yolo,
   coinflip,
+  'llm-news': liveOnly,
 } as const;
 
 /** Return the strategy for an identity. */
@@ -243,4 +253,6 @@ export const STRATEGY_DESCRIPTIONS: Readonly<Record<AgentId, string>> = {
     'Declared trend signal (momentum for price, persistence for weather) plus seeded uniform noise in [-2500, 2500] bps, clipped to [100, 9900].',
   yolo: 'Extreme probability of exactly 0% or 100%, seeded 50/50.',
   coinflip: 'Seeded uniform probability in [0, 10000] bps.',
+  'llm-news':
+    'Live only. An LLM (NEAR AI Cloud, private TEE inference) reads crypto headlines published before cutoff plus the last 24 completed candles and returns a probability with a short rationale. Abstains on timeout or invalid output.',
 } as const;

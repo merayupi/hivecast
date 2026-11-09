@@ -89,7 +89,7 @@ async function main(): Promise<void> {
       eventDefinition: src.label,
       sourceJson: src.json,
       sourceLabel: src.label,
-      targetKey: weatherTargetKey(date),
+      targetKey: weatherTargetKey(date, 'jakarta'),
       openTimeNs: schedule.openTimeNs,
       closeTimeNs: schedule.closeTimeNs,
       observationStartNs: schedule.observationStartNs,

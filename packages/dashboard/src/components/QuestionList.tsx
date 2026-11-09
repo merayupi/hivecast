@@ -2,7 +2,7 @@ import { usePolling, useClock } from '../lib/hooks';
 import { api } from '../lib/api';
 import type { QuestionView } from '../lib/types';
 import { PhaseChip, DomainChip, SingleAgentMark, EmptyState, ErrorNote } from './ui';
-import { countdown, domainLabel, questionDomain } from '../lib/format';
+import { countdown, questionMeta, questionDomain } from '../lib/format';
 
 /** Real Question/Round browse with pagination + domain filter. */
 export function QuestionList({
@@ -46,11 +46,16 @@ export function QuestionList({
               <div className="q-tags">
                 <DomainChip domain={questionDomain(q.source)} />
                 <PhaseChip phase={q.phase} />
+                {q.outcome !== null && q.phase !== 'cancelled' ? (
+                  <span className={`chip ${q.outcome ? 'text-vermilion-700' : 'text-ink-500'}`} title="Final Outcome">
+                    outcome {q.outcome ? 'YES' : 'NO'}
+                  </span>
+                ) : null}
                 <SingleAgentMark count={q.participant_count} />
                 {q.snapshot_ready ? <ChipOk label="snapshot ready" /> : null}
               </div>
               <span className="q-text">{q.text}</span>
-              <span className="q-meta small-caps">{domainLabel(questionDomain(q.source))}</span>
+              <span className="q-meta small-caps">{questionMeta(q.source)}</span>
             </div>
             <div className="q-right num">
               <span className="q-count">{q.participant_count} participant{q.participant_count === 1 ? '' : 's'}</span>

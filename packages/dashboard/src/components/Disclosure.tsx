@@ -24,8 +24,11 @@ export function AgentsPanel() {
       <tbody>
         {data.map((a) => (
           <tr key={a.agentId}>
-            <td className="num">{a.agentId}</td>
-            <td className="num">{a.accountId || '—'}</td>
+            <td>
+              <span className="num">{a.agentId}</span>{' '}
+              {a.liveOnly ? <Chip tone="vermilion">live only · LLM</Chip> : null}
+            </td>
+            <td><span className="num">{a.accountId || '—'}</span></td>
             <td>{a.domains.map((d) => <Chip key={d} tone={d === 'price' ? 'vermilion' : 'ink'}>{d}</Chip>)}</td>
             <td className="num">{a.role}</td>
           </tr>
@@ -48,9 +51,9 @@ export function DisclosurePanel() {
       <DisclosureBlock title="Operator powers" items={data.operator_powers} tone="bad" />
       <DisclosureBlock title="Delivery limits" items={data.delivery_limits} tone="warn" />
       <DisclosureBlock title="Claim / withdraw" items={data.claim_withdrawal} tone="ok" />
-      <p className="muted-line small-caps">
-        This is a non-commercial educational testnet demo. Binance NEAR/USDT is not fiat USD; the Kudus IFS 9 km
-        grid is a model output, not a weather-station reading.
+      <p className="muted-line">
+        This is a non-commercial educational testnet demo. Binance NEAR/USDT is not fiat USD; each city's ECMWF IFS
+        9 km grid value is a model output, not a weather-station reading.
       </p>
     </div>
   );
@@ -73,9 +76,11 @@ function DisclosureBlock({ title, items, tone }: { title: string; items: string[
 
 export function AgentRoleNote() {
   return (
-    <p className="muted-line small-caps">
-      All eight accounts are controlled by one Operator. Six relevant strategies per domain; unsupported
-      specialists abstain and are never presented as participants in the wrong domain.
+    <p className="muted-line">
+      All accounts are controlled by one Operator. The eight algorithmic agents run in both the live market and
+      the offline replay; unsupported specialists abstain and are never presented as participants in the wrong
+      domain. The LLM agent, when configured, is live only: it needs the network at forecast time, so it is never
+      part of the deterministic replay.
     </p>
   );
 }

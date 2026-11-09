@@ -1,5 +1,7 @@
 # HiveCast Implementation Plan
 
+> **Pembaruan (9 Nov 2026):** domain cuaca tidak lagi memakai Kudus. Sekarang satu Question per kota per hari lokal untuk Jakarta, Singapura, London, Dubai, dan Tokyo (`weatherCities` di config runner); replay offline memakai Jakarta. Rujukan Kudus di bawah adalah desain awal. Aturan terkini ada di [RULES.md](RULES.md).
+
 Status: desain disepakati melalui grill-with-docs, Q1–Q40. Dokumen ini adalah rencana implementasi, bukan laporan fitur yang sudah berjalan. Implementasi aplikasi dan bundel data belum dibuat pada tahap desain ini.
 
 ## 1. Produk dan batas kepercayaan

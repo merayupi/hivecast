@@ -46,10 +46,12 @@
     font-weight: 600;
     letter-spacing: -0.02em;
   }
+  /* Apparatus labels. Plain uppercase: synthesized small caps render with
+     mixed letter sizes on fonts that lack real small-cap glyphs (Segoe UI, Inter). */
   .small-caps {
-    font-variant-caps: all-small-caps;
     letter-spacing: 0.08em;
-    font-size: 0.72rem;
+    font-size: 0.68rem;
+    font-weight: 600;
     text-transform: uppercase;
   }
   /* Hairline ruling — the world's one rule drawn at 1 device pixel. */
@@ -287,7 +289,7 @@
 
   .shell-error { margin-bottom: 1rem; }
   .shell-main { min-height: 60vh; }
-  .mode-page { max-width: 960px; }
+  .mode-page { max-width: 1280px; }
   .mode-page > h2 { margin: 0 0 1rem; }
   .economics-section { margin-top: 2rem; }
   .economics-section > h3 { margin: 0 0 0.75rem; font-size: 1.05rem; }
@@ -398,9 +400,9 @@
   .ledger-table th {
     text-align: left;
     font-weight: 600;
-    font-variant-caps: all-small-caps;
+    text-transform: uppercase;
     letter-spacing: 0.06em;
-    font-size: 0.72rem;
+    font-size: 0.66rem;
     color: var(--color-ink-500);
     border-bottom: 1px solid var(--color-ink-900);
     padding: 0.4rem 0.5rem;
@@ -411,6 +413,7 @@
     vertical-align: top;
   }
   .ledger-table th.num, .ledger-table td.num { text-align: right; }
+  .ledger-table td.num { white-space: nowrap; }
 
   .comparison-head {
     display: flex;
@@ -476,6 +479,94 @@
   .empty-title { margin: 0 0 0.5rem; font-size: 1.15rem; }
   .empty-detail { color: var(--color-ink-500); max-width: 60ch; }
 
+
+  /* ---- Intro: hero line + try-it panel ---- */
+  .hero-line { padding: 0 0 1rem; margin-bottom: 1.25rem; }
+  .hero-pitch {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 1.12rem;
+    line-height: 1.45;
+    max-width: 72ch;
+    color: var(--color-ink-900);
+  }
+  .try-panel { display: flex; flex-direction: column; gap: 1.5rem; margin-top: 1rem; }
+  .try-panel section { display: flex; flex-direction: column; gap: 0.55rem; }
+  .try-panel h2 { margin: 0; font-size: 1.05rem; }
+  .try-panel .btn { align-self: flex-start; }
+  .step-list { margin: 0; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.88rem; color: var(--color-ink-700); max-width: 64ch; }
+  .step-list b { color: var(--color-ink-900); }
+  .score-line { display: flex; flex-direction: column; gap: 0.35rem; border-top: 1px solid var(--color-ink-300); padding-top: 0.5rem; }
+  .score-line .small-caps { color: var(--color-ink-500); }
+  .score-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; margin: 0; }
+  .score-grid dt { font-family: var(--font-sans); font-size: 0.7rem; color: var(--color-ink-500); margin: 0; }
+  .score-grid dd { margin: 0; font-size: 1.05rem; font-weight: 600; }
+  .score-grid dd.is-accent { color: var(--color-vermilion-700); }
+
+  /* ---- LLM rationale ---- */
+  .rationale { display: flex; flex-direction: column; gap: 0.75rem; }
+  .rationale-prob { display: flex; align-items: baseline; gap: 0.75rem; margin: 0; }
+  .rationale-prob .num { font-size: 1.15rem; font-weight: 600; color: var(--color-vermilion-700); }
+  .rationale-text {
+    margin: 0;
+    padding: 0.25rem 0 0.25rem 0.9rem;
+    border-left: 2px solid var(--color-vermilion-600);
+    font-family: var(--font-display);
+    font-size: 1rem;
+    line-height: 1.5;
+    color: var(--color-ink-900);
+    max-width: 70ch;
+  }
+  .rationale-kicker { color: var(--color-ink-500); margin: 0 0 0.35rem; }
+  .rationale-headlines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .rationale-headlines li { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.4rem 0; border-bottom: 1px solid var(--color-bone-300); font-size: 0.86rem; }
+
+  /* ---- Charts (plain SVG, ledger ink) ---- */
+  .verdict { padding: 0.75rem 0; }
+  .verdict p { margin: 0; font-size: 0.95rem; line-height: 1.5; max-width: 80ch; color: var(--color-ink-700); }
+  .verdict b { color: var(--color-ink-900); }
+  .chart { margin: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .chart-caption { display: flex; flex-direction: column; gap: 0.2rem; }
+  .chart-caption .ledger-heading { font-size: 1.05rem; }
+  .chart-frame { position: relative; border-top: 1px solid var(--color-ink-900); padding-top: 0.5rem; }
+  .chart svg { width: 100%; max-width: 980px; height: auto; display: block; overflow: visible; }
+  .chart .grid { stroke: var(--color-bone-300); stroke-width: 1; }
+  .chart .ref-line { stroke: var(--color-ink-500); stroke-width: 1; stroke-dasharray: 2 3; }
+  .chart .crosshair { stroke: var(--color-ink-900); stroke-width: 1; }
+  .chart .axis { font-family: var(--font-mono); font-size: 10px; fill: var(--color-ink-500); }
+  .chart .label { font-family: var(--font-mono); font-size: 11px; fill: var(--color-ink-700); }
+  .chart .label.is-winner { fill: var(--color-vermilion-700); font-weight: 600; }
+  .chart .label-val { fill: var(--color-ink-500); font-weight: 400; }
+  .chart .end-label { cursor: default; }
+  .chart .bar { fill: var(--color-ink-500); }
+  .chart .bar.is-swarm { fill: var(--color-vermilion-600); }
+  .chart .bar.is-swarm-alt { fill: var(--color-vermilion-50); stroke: var(--color-vermilion-600); stroke-width: 1; }
+  .chart .bar.is-baseline { fill: var(--color-bone-200); stroke: var(--color-ink-500); stroke-width: 1; stroke-dasharray: 3 2; }
+  .chart .bar-row:hover .bar { filter: brightness(0.85); }
+  .chart-tip {
+    position: absolute;
+    top: 0.5rem;
+    transform: translateX(8px);
+    background: var(--color-bone-50);
+    border: 1px solid var(--color-ink-900);
+    padding: 0.35rem 0.5rem;
+    font-size: 0.72rem;
+    min-width: 9rem;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .chart-tip .tip-head { font-weight: 600; border-bottom: 1px solid var(--color-ink-300); margin-bottom: 0.2rem; padding-bottom: 0.15rem; }
+  .chart-tip .tip-row { display: flex; justify-content: space-between; gap: 1rem; }
+  .legend-key { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.5rem; white-space: nowrap; }
+  .key-line { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--color-vermilion-600); }
+  .key-line.is-broke { border-top: 2px dashed var(--color-ink-300); }
+
+  /* Wide ledgers scroll inside themselves on narrow screens, never the page. */
+  @media (max-width: 720px) {
+    .ledger-table { display: block; overflow-x: auto; white-space: nowrap; max-width: 100%; }
+  }
+  .chart, .simulation > * { min-width: 0; }
+
   @media (max-width: 900px) {
     .live-view { grid-template-columns: 1fr; }
     .topbar { flex-wrap: wrap; }
@@ -484,6 +575,10 @@
   @media (max-width: 480px) {
     .shell { padding: 0 0.9rem 2rem; }
     .detail-stats, .balance-stats, .forecast-reveal, .detail-facts { grid-template-columns: 1fr; }
+    .score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .chart-frame { overflow-x: auto; }
+    .chart svg { min-width: 560px; }
+    .hero-pitch { font-size: 1rem; }
     .topbar-right { width: 100%; justify-content: space-between; flex-wrap: wrap; }
     .wallet-control { flex-wrap: wrap; }
   }

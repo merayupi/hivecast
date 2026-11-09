@@ -28,8 +28,10 @@ const EVAL_START = '2026-08-01';
 const EVAL_END = '2026-09-29'; // inclusive
 const PRICE_WARMUP_START = '2026-07-25'; // 7 days before eval
 const WEATHER_WARMUP_START = '2025-08-01'; // 365 days before eval
-const LAT = -6.8049;
-const LON = 110.8397;
+// Replay location: Jakarta (Asia/Jakarta, WIB, same day boundaries as before).
+const LOCATION = 'Jakarta, Indonesia';
+const LAT = -6.2088;
+const LON = 106.8456;
 
 const HOUR_MS = 3600 * 1000;
 const BINANCE_VISION_BASE = 'https://data.binance.vision/data/spot/monthly/klines';
@@ -296,6 +298,7 @@ function buildManifest(input: ManifestInput) {
   return {
     bundleVersion: 2,
     generatedAt: input.generatedAt,
+    weatherLocation: LOCATION,
     evalPeriod: {
       start: EVAL_START,
       end: EVAL_END,
@@ -360,7 +363,7 @@ function buildManifest(input: ManifestInput) {
         kind: 'outcome',
         instrument: 'precipitation_sum (mm)',
         model: 'ecmwf_ifs',
-        grid: '9 km (O1280); cell nearest lat=-6.8049 lon=110.8397',
+        grid: `9 km (O1280); cell nearest lat=${LAT} lon=${LON} (${LOCATION})`,
         source: 'Open-Meteo Historical Weather API (Archive)',
         url: 'https://open-meteo.com/en/docs/historical-weather-api',
         attribution: 'Open-Meteo (Weather data by Open-Meteo.com), ECMWF IFS',

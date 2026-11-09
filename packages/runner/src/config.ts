@@ -8,14 +8,14 @@
 
 import { readFileSync } from 'node:fs';
 import { AGENT_IDS } from '@hivecast/core';
-import type { AgentId } from '@hivecast/core';
+import type { AlgoAgentId, LiveAgentId } from '@hivecast/core';
 import {
   DEFAULT_ACCESS_PRICE,
   DEFAULT_MIN_STAKE,
-  KUDUS_LAT,
-  KUDUS_LON,
-  WEATHER_TIMEZONE,
+  DEFAULT_WEATHER_CITIES,
+  localDateOfUtcMs,
 } from './schedule.js';
+import type { WeatherCity } from './schedule.js';
 
 export interface RunnerConfig {
   networkId: string;
@@ -29,13 +29,15 @@ export interface RunnerConfig {
   pollIntervalMs: number;
   minStakeYocto: bigint;
   accessPriceYocto: bigint;
-  agentAccounts: Record<AgentId, string>;
+  /** The eight algorithmic agents are required; live-only agents are optional. */
+  agentAccounts: Record<AlgoAgentId, string> & Partial<Record<LiveAgentId, string>>;
+  /** Live-only LLM agent (`llm-news`). `null` when not configured. */
+  llm?: LlmConfig | null;
   binanceBaseUrl: string;
   openMeteoBaseUrl: string;
   archiveBaseUrl: string;
-  kudusLatitude: string;
-  kudusLongitude: string;
-  kudusTimezone: string;
+  /** Cities whose daily rain gets one weather Question per local day. */
+  weatherCities: WeatherCity[];
   /** In-flight gas reserve kept out of stake sizing (yoctoNEAR). */
   operationalGasReserveYocto: bigint;
   /** Per-RPC-request timeout (ms) for read-only public views. A hanging/rate-
@@ -60,6 +62,96 @@ export interface RunnerConfig {
   };
   /** Deterministic credential override map (secret keys injected, not files). */
   credentials?: Record<string, string>;
+}
+
+/**
+ * LLM agent settings. The API key is resolved at load time from the env var
+ * named by `apiKeyEnv` (default NEARAI_API_KEY), else from `apiKey` in the
+ * git-ignored config file. It is never logged or served.
+ */
+export interface LlmConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** Shown on the dashboard next to each rationale, e.g. "NEAR AI Cloud · private TEE inference". */
+  providerLabel: string;
+  maxTokens: number;
+  timeoutMs: number;
+  /** LLM attempts per Round before the agent abstains for that Round. */
+  maxAttempts: number;
+  newsFeeds: string[];
+  maxHeadlines: number;
+  /** Only headlines published within this many hours before the call are used. */
+  headlineWindowHours: number;
+}
+
+const DEFAULT_NEWS_FEEDS = [
+  'https://www.coindesk.com/arc/outboundfeeds/rss/',
+  'https://cointelegraph.com/rss',
+  'https://decrypt.co/feed',
+];
+
+function parseLlm(raw: unknown, hasAccount: boolean): LlmConfig | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object') throw new Error('config.llm must be an object');
+  const l = raw as Record<string, unknown>;
+  if (l.enabled === false) return null;
+  if (!hasAccount) {
+    throw new Error('config.llm is set but config.agentAccounts["llm-news"] is missing');
+  }
+  const envName = typeof l.apiKeyEnv === 'string' && l.apiKeyEnv ? l.apiKeyEnv : 'NEARAI_API_KEY';
+  const apiKey = process.env[envName] ?? (typeof l.apiKey === 'string' ? l.apiKey : '');
+  if (!apiKey) {
+    throw new Error(`config.llm: no API key (set env ${envName} or llm.apiKey in the git-ignored config)`);
+  }
+  const num = (v: unknown, d: number, field: string): number => {
+    if (v === undefined) return d;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) throw new Error(`config.llm.${field} must be a positive number`);
+    return v;
+  };
+  return {
+    baseUrl: requireString(l.baseUrl ?? 'https://cloud-api.near.ai/v1', 'llm.baseUrl').replace(/\/+$/, ''),
+    apiKey,
+    model: requireString(l.model ?? 'deepseek-ai/DeepSeek-V4.1-Flash-1017', 'llm.model'),
+    providerLabel: typeof l.providerLabel === 'string' ? l.providerLabel : 'NEAR AI Cloud · private TEE inference',
+    maxTokens: num(l.maxTokens, 2000, 'maxTokens'),
+    timeoutMs: num(l.timeoutMs, 90_000, 'timeoutMs'),
+    maxAttempts: num(l.maxAttempts, 3, 'maxAttempts'),
+    newsFeeds: Array.isArray(l.newsFeeds) ? (l.newsFeeds as unknown[]).map(String) : DEFAULT_NEWS_FEEDS,
+    maxHeadlines: num(l.maxHeadlines, 15, 'maxHeadlines'),
+    headlineWindowHours: num(l.headlineWindowHours, 12, 'headlineWindowHours'),
+  };
+}
+
+/** Validate `weatherCities` (defaults to Jakarta, Singapore, London, Dubai, Tokyo). */
+function parseCities(raw: unknown): WeatherCity[] {
+  if (raw === undefined) return DEFAULT_WEATHER_CITIES.map((c) => ({ ...c }));
+  if (!Array.isArray(raw) || raw.length === 0) throw new Error('config.weatherCities must be a non-empty array');
+  const seen = new Set<string>();
+  return raw.map((item, i) => {
+    const o = (item ?? {}) as Record<string, unknown>;
+    const field = (k: string) => requireString(o[k], `weatherCities[${i}].${k}`);
+    const city: WeatherCity = {
+      id: field('id'),
+      name: field('name'),
+      country: field('country'),
+      latitude: field('latitude'),
+      longitude: field('longitude'),
+      timezone: field('timezone'),
+    };
+    if (!/^[a-z0-9-]+$/.test(city.id)) throw new Error(`weatherCities[${i}].id must be lowercase letters, digits or dashes`);
+    if (seen.has(city.id)) throw new Error(`duplicate weatherCities id ${city.id}`);
+    seen.add(city.id);
+    const lat = Number(city.latitude);
+    const lon = Number(city.longitude);
+    if (!(lat >= -90 && lat <= 90) || !(lon >= -180 && lon <= 180)) throw new Error(`weatherCities[${i}] has invalid coordinates`);
+    try {
+      localDateOfUtcMs(0, city.timezone);
+    } catch {
+      throw new Error(`weatherCities[${i}].timezone ${city.timezone} is not a valid IANA time zone`);
+    }
+    return city;
+  });
 }
 
 const REQUIRED_AGENTS = AGENT_IDS;
@@ -102,13 +194,20 @@ export function loadConfig(path: string): RunnerConfig {
   if (!agentAccounts || typeof agentAccounts !== 'object') {
     throw new Error('config.agentAccounts must map each agent id to an account id');
   }
-  const accounts: Record<AgentId, string> = {} as Record<AgentId, string>;
+  const accounts = {} as RunnerConfig['agentAccounts'];
   for (const id of REQUIRED_AGENTS) {
     const v = agentAccounts[id];
     if (typeof v !== 'string' || v.trim() === '') {
       throw new Error(`config.agentAccounts.${id} must be a non-empty account id`);
     }
     accounts[id] = v;
+  }
+  const llmAccount = agentAccounts['llm-news'];
+  if (llmAccount !== undefined) {
+    if (typeof llmAccount !== 'string' || llmAccount.trim() === '') {
+      throw new Error('config.agentAccounts.llm-news must be a non-empty account id when present');
+    }
+    accounts['llm-news'] = llmAccount;
   }
 
   const httpRaw = (c.http ?? {}) as Record<string, unknown>;
@@ -135,12 +234,11 @@ export function loadConfig(path: string): RunnerConfig {
       ? DEFAULT_ACCESS_PRICE
       : parsePositiveBigInt(c.accessPriceYocto, 'accessPriceYocto'),
     agentAccounts: accounts,
+    llm: parseLlm(c.llm, accounts['llm-news'] !== undefined),
     binanceBaseUrl: requireString(c.binanceBaseUrl ?? 'https://api.binance.com', 'binanceBaseUrl'),
     openMeteoBaseUrl: requireString(c.openMeteoBaseUrl ?? 'https://api.open-meteo.com', 'openMeteoBaseUrl'),
     archiveBaseUrl: requireString(c.archiveBaseUrl ?? 'https://archive-api.open-meteo.com', 'archiveBaseUrl'),
-    kudusLatitude: requireString(c.kudusLatitude ?? KUDUS_LAT, 'kudusLatitude'),
-    kudusLongitude: requireString(c.kudusLongitude ?? KUDUS_LON, 'kudusLongitude'),
-    kudusTimezone: requireString(c.kudusTimezone ?? WEATHER_TIMEZONE, 'kudusTimezone'),
+    weatherCities: parseCities(c.weatherCities),
     operationalGasReserveYocto: c.operationalGasReserveYocto === undefined
       ? 50_000_000_000_000_000_000_000n // 0.05 NEAR
       : parseNonNegativeBigInt(c.operationalGasReserveYocto, 'operationalGasReserveYocto'),

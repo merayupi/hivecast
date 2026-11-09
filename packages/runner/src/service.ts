@@ -301,6 +301,17 @@ export function createPublicService(runtime: Runtime): Server {
         return sendJson(res, 200, { question_id: questionId, entries: board }, runtime);
       }
 
+      if (req.method === 'GET' && parts[0] === 'questions' && parts[1] && parts[2] === 'rationale') {
+        const questionId = parseQuestionId(parts[1]);
+        if (questionId === null) {
+          return sendJson(res, 400, { error: 'invalid_question_id' }, runtime);
+        }
+        const r = await runtime.getLlmRationale(questionId);
+        if (r.status === 'ok') return sendJson(res, 200, r.rationale, runtime);
+        const code = r.status === 'not_revealed' ? 403 : r.status === 'unavailable' ? 503 : 404;
+        return sendJson(res, code, { error: r.status }, runtime);
+      }
+
       if (req.method === 'GET' && parts[0] === 'questions' && parts[1] && parts[2] === 'comparison') {
         const questionId = parseQuestionId(parts[1]);
         if (questionId === null) {

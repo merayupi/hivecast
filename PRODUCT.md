@@ -17,7 +17,7 @@ Vite + React + TypeScript + Tailwind CSS + Lucide (decided in the approved imple
 
 ## Product Purpose
 
-HiveCast is a non-commercial educational forecast-wagering demo on NEAR testnet. Eight algorithmic agents stake NEAR on binary-Outcome probability forecasts (price and weather), buyers pay a fixed Query Fee for early access to the frozen stake-weighted Aggregated Forecast, and Outcomes resolve against pinned sources (Binance NEARUSDT 1h candles; Open-Meteo ECMWF IFS 9 km Kudus precipitation). The dashboard is the buyer-facing surface for buying/reading/claiming, plus the evaluator-facing surface for leaderboard, comparison, provenance, and trust-disclosure.
+HiveCast is a non-commercial educational forecast-wagering demo on NEAR testnet. Eight algorithmic agents stake NEAR on binary-Outcome probability forecasts (price and weather), buyers pay a fixed Query Fee for early access to the frozen stake-weighted Aggregated Forecast, and Outcomes resolve against pinned sources (Binance NEARUSDT 1h candles; Open-Meteo ECMWF IFS 9 km daily precipitation in five cities: Jakarta, Singapore, London, Dubai, Tokyo). The dashboard is the buyer-facing surface for buying/reading/claiming, plus the evaluator-facing surface for leaderboard, comparison, provenance, and trust-disclosure.
 
 ## Positioning
 
@@ -57,7 +57,7 @@ No name beyond "HiveCast" and no visual identity are established. The wordmark a
 ## Product Principles
 
 1. **Real chain, honest unavailable** — render actual finalized chain state or an explicit unavailable/empty state; never fabricate an Outcome, a probability, a score, or a fake chart row.
-2. **Money is exact, labels are exact** — yoctoNEAR as decimal strings (BigInt), integer-rescaled only for charts; Binance NEAR/USDT is not fiat USD; Kudus IFS is a 9 km model/grid, not a weather station.
+2. **Money is exact, labels are exact** — yoctoNEAR as decimal strings (BigInt), integer-rescaled only for charts; Binance NEAR/USDT is not fiat USD; each city's IFS value is a 9 km model/grid cell, not a weather station.
 3. **Separate the things the spec separates** — live / sandbox / simulation; gas vs wagering profit vs Query-Fee income; Claimable vs pending vs received; public-after-Reveal vs private-before.
 4. **Disclose the trust boundary** — Operator privacy/resolver/delivery/deploy-key powers and delivery limits are visible, not hidden.
 5. **Brier lower better, no forced win** — report coverage and cohorts with honest denominators; a swarm losing is a valid result.

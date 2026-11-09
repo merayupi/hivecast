@@ -1,7 +1,100 @@
-# hivecast
+# HiveCast
 
-HiveCast: forecast wagering demo — a NEAR testnet contract, an autonomous agent
-runner, authenticated Forecast Access delivery, an offline replay, and a dashboard.
+**A swarm of forecasting agents that bet on being right — and sell the
+swarm's combined forecast.** Built at **NEAR HACKATHON** (Nov 2026) on NEAR
+testnet.
+
+Eight algorithmic agents and one LLM agent stake testnet NEAR on yes/no questions ("Will NEAR/USDT close
+higher this hour?", "Will it rain in Tokyo tomorrow?"). Weather runs in five
+cities with contrasting climates: Jakarta, Singapore, London, Dubai, and Tokyo. Forecasts are hidden
+with commit–reveal, scored with the Brier rule, and paid out by weighted-score
+wagering: accurate agents take stake from inaccurate ones. Before each event
+starts, anyone can pay 0.01 NEAR to read the frozen stake-weighted swarm
+forecast.
+
+**Problem:** forecasts are cheap to publish and nobody pays for being wrong.
+HiveCast makes every forecaster put money behind each number, so the combined
+forecast is weighted by stake and the payouts keep score.
+
+## NEAR HACKATHON submission
+
+| | |
+| --- | --- |
+| Tracks | AI Swarms (`swarms`), Agent Economy (`agents`) |
+| Demo post on X | _(add the link before submitting)_ |
+| Live site | _(add the link if hosted; see [deploy/DEPLOY.md](deploy/DEPLOY.md))_ |
+| Contract (testnet) | `hivecast-market-6c4d.testnet` |
+| Rules | [RULES.md](RULES.md) |
+| License | [MIT](LICENSE) |
+| Built | 2026-11-05 → 2026-11-14, all code written during the hackathon window, with AI coding agents. No pre-hackathon code. |
+
+### Try it in one minute (no wallet, no network)
+
+```bash
+npm install
+npm run sim
+```
+
+You should see two tables (price, weather) of six agents each, followed by
+the swarm aggregates and two baselines. The replay is offline and
+deterministic (seed 42), over checksummed data for 2026-08-01 → 2026-09-29.
+
+### What the replay shows (honest results)
+
+Mean Brier score, lower is better (0.25 = always answering 50%):
+
+| Domain | Swarm (stake-weighted, the paid product) | Best single agent | Always 50% | Past YES rate |
+| --- | --- | --- | --- | --- |
+| Price, 1440 hourly rounds | **0.271** | 0.305 (`meanrev`) | 0.250 | 0.251 |
+| Weather, 60 daily rounds (Jakarta) | _rerun pending_ | _rerun pending_ | 0.250 | _rerun pending_ |
+
+- **The money mechanism works.** `yolo` (always 0% or 100%) runs out of capital
+  in the price replay; `meanrev` grows 100 → 532 NEAR. Over-confidence is punished.
+- **On price, the swarm beats every agent, but not a coin-toss forecaster.**
+  Hourly NEAR candles are close to random, so no agent here adds information
+  beyond 50%. We show the baseline instead of hiding it.
+- **Weather:** _TODO before submitting — refresh the Jakarta bundle with
+  `npm run fetch-data --workspace @hivecast/simulation`, rerun `npm run sim`,
+  and fill in this row and this paragraph from the output._
+
+The **Simulation** tab of the dashboard draws the bankroll race and the
+accuracy chart from the same report.
+
+### Where NEAR does the work
+
+- **A private LLM agent on NEAR AI Cloud.** `llm-news` reads crypto headlines
+  published before cutoff plus the last 24 hourly candles and asks
+  DeepSeek V4.1 Flash, running in a NEAR AI TEE, for a probability and a short
+  rationale. The forecast must stay secret until Reveal, so inference runs where
+  even the model host cannot read the prompt or reply. The headlines and
+  reasoning are published on the Round page at the agent's Reveal, and it is
+  scored by the same Brier rule as everyone else. It is live only: the
+  replay stays offline and deterministic.
+
+- **One sub-account per agent** (`meteo.hivecast-1105-0548.testnet`, …): every
+  commit, reveal, and payout traces to one agent on chain.
+- **The contract holds the money and the rules**: commit–reveal, exact-integer
+  weighted-score payouts, stake-weighted fee split, refunds, and a two-step
+  withdraw with a callback that restores funds if a transfer fails.
+- **Pay-per-read with NEAR wallets**: `buy_forecast` attaches exactly 0.01 NEAR;
+  reading proves account ownership with a one-use NEP-413 signature, so a public
+  account ID or transaction hash cannot unlock the forecast.
+
+### Try the live flow (testnet)
+
+1. Create a testnet wallet in [Meteor Wallet](https://wallet.meteorwallet.app)
+   and get free testnet NEAR from [near-faucet.io](https://near-faucet.io).
+2. Open the live site (or run the runner + dashboard locally, below), press
+   **Connect wallet**, pick a Round marked **snapshot ready**, and buy access.
+3. Sign the login message and read the frozen forecast. Re-reading is free.
+4. After the Round settles, compare every agent's revealed probability and
+   Brier score in the Round detail, and read what the LLM agent saw and why it
+   forecast what it did.
+
+---
+
+Technical overview: a NEAR testnet contract, an autonomous agent runner,
+authenticated Forecast Access delivery, an offline replay, and a dashboard.
 
 ## Workspaces
 
@@ -71,6 +164,12 @@ All money/timestamps cross the JSON boundary as decimal strings; never `number`.
   proof (Linux; see the contract/runner harnesses). Not a live event.
 - **Simulation** — the offline replay (`npm run sim`), deterministic and
   network-free; its balances are simulated and never presented as chain activity.
+
+## Public deployment
+
+See [deploy/DEPLOY.md](deploy/DEPLOY.md): one origin behind Caddy, the built
+dashboard as static files, `/api/*` proxied to the runner service, and two
+systemd units for the service and the agent scheduler.
 
 ## Requirements
 

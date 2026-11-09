@@ -12,6 +12,21 @@
  */
 
 import { DatabaseSync } from 'node:sqlite';
+
+/** One llm-news attempt for a Round (private until Reveal). */
+export interface LlmRunRecord {
+  questionId: number;
+  accountId: string;
+  model: string;
+  promptSha256: string;
+  headlines: { title: string; source: string; publishedAtMs: number }[];
+  probBps: number | null;
+  rationale: string | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  error: string | null;
+  createdAtMs: number;
+}
 import type {
   ForecastRecord,
   JournalEntry,
@@ -200,6 +215,23 @@ export class Store {
         hash TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (question_id, stage, hash)
+      );
+
+      -- llm-news attempts (private until the agent's on-chain Reveal).
+      CREATE TABLE IF NOT EXISTS llm_runs (
+        question_id INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        model TEXT NOT NULL,
+        prompt_sha256 TEXT NOT NULL,
+        headlines_json TEXT NOT NULL,
+        prob_bps INTEGER,
+        rationale TEXT,
+        prompt_tokens INTEGER,
+        completion_tokens INTEGER,
+        error TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (question_id, account_id, attempt)
       );
 
       CREATE TABLE IF NOT EXISTS access_challenges (
@@ -473,6 +505,64 @@ export class Store {
   }
 
   /** Persist exact source evidence (raw response, request, model/grid/units/hash). */
+  // -------------------------------------------------------------------------
+  // llm-news runs (private; public only after Reveal via Runtime)
+  // -------------------------------------------------------------------------
+
+  countLlmRuns(questionId: number, accountId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM llm_runs WHERE question_id = ? AND account_id = ?')
+      .get(questionId, accountId) as { n: number };
+    return Number(row.n);
+  }
+
+  saveLlmRun(run: LlmRunRecord): void {
+    const attempt = this.countLlmRuns(run.questionId, run.accountId) + 1;
+    this.db
+      .prepare(
+        `INSERT INTO llm_runs (question_id, account_id, attempt, model, prompt_sha256, headlines_json, prob_bps,
+           rationale, prompt_tokens, completion_tokens, error, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        run.questionId,
+        run.accountId,
+        attempt,
+        run.model,
+        run.promptSha256,
+        JSON.stringify(run.headlines),
+        run.probBps,
+        run.rationale,
+        run.promptTokens,
+        run.completionTokens,
+        run.error,
+        run.createdAtMs,
+      );
+  }
+
+  /** The successful run whose probability was committed (latest with a probability). */
+  getLlmRun(questionId: number, accountId: string): LlmRunRecord | null {
+    const row = this.db
+      .prepare(
+        'SELECT * FROM llm_runs WHERE question_id = ? AND account_id = ? AND prob_bps IS NOT NULL ORDER BY attempt DESC LIMIT 1',
+      )
+      .get(questionId, accountId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      questionId: Number(row.question_id),
+      accountId: row.account_id as string,
+      model: row.model as string,
+      promptSha256: row.prompt_sha256 as string,
+      headlines: JSON.parse(row.headlines_json as string) as LlmRunRecord['headlines'],
+      probBps: row.prob_bps === null ? null : Number(row.prob_bps),
+      rationale: (row.rationale as string | null) ?? null,
+      promptTokens: row.prompt_tokens === null ? null : Number(row.prompt_tokens),
+      completionTokens: row.completion_tokens === null ? null : Number(row.completion_tokens),
+      error: (row.error as string | null) ?? null,
+      createdAtMs: Number(row.created_at),
+    };
+  }
+
   saveEvidence(questionId: number, stage: 'input' | 'resolve', evidenceJson: string, hash: string): void {
     this.db
       .prepare('INSERT OR REPLACE INTO evidence (question_id, stage, evidence_json, hash, created_at) VALUES (?, ?, ?, ?, ?)')

@@ -19,8 +19,11 @@ import {
   sourceDefinition,
   weatherTargetKey,
   weatherTargetLabel,
-  wibDateOfUtcMs,
+  localDateOfUtcMs,
+  nextDate,
+  zonedMidnightUtc,
 } from './schedule.js';
+import type { WeatherCity } from './schedule.js';
 import { Store } from './store.js';
 
 function buildRuntime() {
@@ -37,7 +40,7 @@ function usage(): never {
     [
       'Usage:',
       '  hivecast-runner create-price <hourStartMs>     create a price Question for a UTC hour',
-      '  hivecast-runner create-weather <date>          create a weather Question for a WIB date',
+      '  hivecast-runner create-weather <date> [city]   create a weather Question for a local date (default: first city)',
       '  hivecast-runner tick                           advance all tracked Questions once',
       '  hivecast-runner run                            autonomous scheduler (watch + tick, graceful stop)',
       '  hivecast-runner status                         list lifecycle status',
@@ -79,21 +82,20 @@ async function createPrice(args: string[]): Promise<void> {
   store.close();
 }
 
-async function createWeather(args: string[]): Promise<void> {
-  const date = args[0] ?? '';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) usage();
-  const { runner, store } = buildRuntime();
-  const dateUtcMs = Date.parse(`${date}T00:00:00+07:00`);
-  const schedule = computeWeatherSchedule(dateUtcMs);
+/** Question spec for one city's local day (observation = local 00:00 → next local 00:00). */
+function weatherSpec(date: string, city: WeatherCity) {
+  const obsStart = zonedMidnightUtc(date, city.timezone);
+  const obsEnd = zonedMidnightUtc(nextDate(date), city.timezone);
+  const schedule = computeWeatherSchedule(obsStart, obsEnd);
   const label = weatherTargetLabel(date);
-  const src = sourceDefinition('weather', date);
-  const res = await runner.createQuestion({
-    domain: 'weather',
-    text: questionText('weather', label),
+  const src = sourceDefinition('weather', label, city);
+  return {
+    domain: 'weather' as const,
+    text: questionText('weather', label, city),
     eventDefinition: src.label,
     sourceJson: src.json,
     sourceLabel: src.label,
-    targetKey: weatherTargetKey(date),
+    targetKey: weatherTargetKey(date, city.id),
     openTimeNs: schedule.openTimeNs,
     closeTimeNs: schedule.closeTimeNs,
     observationStartNs: schedule.observationStartNs,
@@ -101,7 +103,19 @@ async function createWeather(args: string[]): Promise<void> {
     resolveTimeNs: schedule.resolveTimeNs,
     resolveDeadlineNs: schedule.resolveDeadlineNs,
     revealWindowNs: schedule.revealWindowNs,
-  });
+  };
+}
+
+async function createWeather(args: string[]): Promise<void> {
+  const date = args[0] ?? '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) usage();
+  const { config, runner, store } = buildRuntime();
+  const city = args[1] ? config.weatherCities.find((c) => c.id === args[1]) : config.weatherCities[0];
+  if (!city) {
+    process.stderr.write(`unknown city ${args[1]}; configured: ${config.weatherCities.map((c) => c.id).join(', ')}\n`);
+    process.exit(2);
+  }
+  const res = await runner.createQuestion(weatherSpec(date, city));
   if (res.error) {
     process.stderr.write(`create_question failed: ${res.error}\n`);
     process.exit(1);
@@ -143,26 +157,9 @@ async function ensurePriceQuestion(runner: Runner, hourStartMs: number): Promise
   });
 }
 
-/** Idempotent: ensure the weather Question for the given WIB date exists. */
-async function ensureWeatherQuestion(runner: Runner, date: string): Promise<void> {
-  const wibMidnight = Date.parse(`${date}T00:00:00+07:00`);
-  const schedule = computeWeatherSchedule(wibMidnight);
-  const src = sourceDefinition('weather', date);
-  await runner.createQuestion({
-    domain: 'weather',
-    text: questionText('weather', date),
-    eventDefinition: src.label,
-    sourceJson: src.json,
-    sourceLabel: src.label,
-    targetKey: weatherTargetKey(date),
-    openTimeNs: schedule.openTimeNs,
-    closeTimeNs: schedule.closeTimeNs,
-    observationStartNs: schedule.observationStartNs,
-    observationEndNs: schedule.observationEndNs,
-    resolveTimeNs: schedule.resolveTimeNs,
-    resolveDeadlineNs: schedule.resolveDeadlineNs,
-    revealWindowNs: schedule.revealWindowNs,
-  });
+/** Idempotent: ensure the weather Question for one city's local date exists. */
+async function ensureWeatherQuestion(runner: Runner, date: string, city: WeatherCity): Promise<void> {
+  await runner.createQuestion(weatherSpec(date, city));
 }
 
 /** Autonomous scheduler: idempotent Question scheduling + lifecycle tick loop. */
@@ -192,8 +189,16 @@ async function run(): Promise<void> {
       const now = Date.now();
       const nextHour = Math.floor(now / 3_600_000) * 3_600_000 + 3_600_000;
       await ensurePriceQuestion(runner, nextHour);
-      const date = wibDateOfUtcMs(now + 7 * 3_600_000 + 86_400_000);
-      await ensureWeatherQuestion(runner, date);
+      // One weather Question per city for its NEXT local day (created well before
+      // the 18:00-local commitment opening).
+      for (const city of config.weatherCities) {
+        const tomorrow = nextDate(localDateOfUtcMs(now, city.timezone));
+        try {
+          await ensureWeatherQuestion(runner, tomorrow, city);
+        } catch (err) {
+          process.stderr.write(`[run] weather ${city.id} ${tomorrow}: ${(err as Error).message}\n`);
+        }
+      }
 
       const report = await runner.tick();
       for (const step of report.steps) {

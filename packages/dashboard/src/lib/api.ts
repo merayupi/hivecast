@@ -12,6 +12,7 @@ import type {
   EconomicsReport,
   ForecastDeliveryDto,
   GlobalLeaderboard,
+  LlmRationale,
   PendingWithdrawalView,
   PublicConfig,
   QuestionComparison,
@@ -86,4 +87,16 @@ export const api = {
     post<SessionDto>('/auth/verify', input),
   logout: () => post<void>('/auth/logout', {}),
   forecast: (id: number) => get<ForecastDeliveryDto>(`/forecast/${id}`),
+  /** llm-news rationale: `hidden` before its Reveal, `absent` when it did not take part. */
+  rationale: async (
+    id: number,
+  ): Promise<{ state: 'ok'; data: LlmRationale } | { state: 'hidden' } | { state: 'absent' }> => {
+    try {
+      return { state: 'ok', data: await get<LlmRationale>(`/questions/${id}/rationale`) };
+    } catch (err) {
+      if (err instanceof ApiClientError && err.status === 403) return { state: 'hidden' };
+      if (err instanceof ApiClientError && err.status === 404) return { state: 'absent' };
+      throw err;
+    }
+  },
 };

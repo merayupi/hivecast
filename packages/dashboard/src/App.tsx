@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { Shell } from './components/Shell';
+import { HeroLine, TryItPanel } from './components/Intro';
+import { RationalePanel } from './components/Rationale';
 import { QuestionList } from './components/QuestionList';
 import { QuestionDetail } from './components/QuestionDetail';
 import { BalancePanel } from './components/BalancePanel';
@@ -47,6 +49,7 @@ export function App() {
           setSelectedId={setSelectedId}
           walletState={state}
           onLogin={() => void login()}
+          onSimulation={() => setMode('simulation')}
         />
       ) : mode === 'simulation' ? (
         <SimulationPanel />
@@ -61,7 +64,7 @@ export function App() {
         </section>
       ) : mode === 'agents' ? (
         <section className="mode-page">
-          <h2 className="ledger-heading">The eight identities</h2>
+          <h2 className="ledger-heading">The agents</h2>
           <AgentRoleNote />
           <AgentsPanel />
         </section>
@@ -83,6 +86,7 @@ function LiveView({
   setSelectedId,
   walletState,
   onLogin,
+  onSimulation,
 }: {
   domain: 'all' | 'price' | 'weather';
   setDomain: (d: 'all' | 'price' | 'weather') => void;
@@ -91,8 +95,11 @@ function LiveView({
   setSelectedId: (id: number | null) => void;
   walletState: WalletState;
   onLogin: () => void;
+  onSimulation: () => void;
 }) {
   return (
+    <>
+    <HeroLine />
     <div className="live-view">
       <div className="live-list">
         <div className="list-head">
@@ -129,17 +136,18 @@ function LiveView({
             {selected.phase === 'resolved' || selected.phase === 'settled' || selected.phase === 'cancelled' ? (
               <ComparisonPanel questionId={selected.question_id} />
             ) : null}
+            {selected.phase === 'resolved' || selected.phase === 'settled' ? (
+              <RationalePanel questionId={selected.question_id} />
+            ) : null}
           </>
         ) : (
           <div className="detail-empty">
-            <p className="empty-title ledger-heading">Select a Round</p>
-            <p className="muted-line">
-              Inspect the event, source, schedule, and price; buy Forecast Access; read the frozen snapshot;
-              and compare Reveals once the Outcome is final.
-            </p>
+            <p className="muted-line">Select a Round on the left to see its schedule, buy access, or compare Reveals.</p>
+            <TryItPanel onSimulation={onSimulation} />
           </div>
         )}
       </div>
     </div>
+    </>
   );
 }

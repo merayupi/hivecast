@@ -24,6 +24,20 @@ export interface AgentRosterEntry {
   accountId: string;
   domains: string[];
   role: 'weather' | 'price' | 'both';
+  /** Live-only identity (LLM): never part of the offline replay. */
+  liveOnly?: boolean;
+}
+
+export interface LlmRationale {
+  question_id: number;
+  account_id: string;
+  model: string;
+  provider: string;
+  revealed_prob_bps: number;
+  rationale: string;
+  headlines: { title: string; source: string; published_at: string }[];
+  prompt_sha256: string;
+  matches_reveal: boolean;
 }
 
 export interface TrustDisclosure {
@@ -229,6 +243,20 @@ export interface AggregateSummary {
   logOddsClip: string;
 }
 
+export interface BaselineSummary {
+  domain: Domain;
+  kind: 'constant-50' | 'running-base-rate';
+  rounds: number;
+  brierMean: number;
+}
+
+export interface BankrollSeries {
+  sampleEvery: number;
+  labels: string[];
+  /** agentId -> bankroll (yoctoNEAR decimal strings) after each sampled Round. */
+  bankrolls: Record<string, string[]>;
+}
+
 export interface DomainResult {
   domain: Domain;
   seed: number;
@@ -238,6 +266,9 @@ export interface DomainResult {
   peakLockedStake: string;
   agents: AgentSummary[];
   aggregates: AggregateSummary[];
+  /** Optional so an older runner report still renders. */
+  baselines?: BaselineSummary[];
+  series?: BankrollSeries;
   participants: string[];
 }
 
@@ -251,6 +282,7 @@ export interface ReplayReport {
     evalPeriod: { start: string; end: string };
     priceRounds: number;
     weatherRounds: number;
+    weatherLocation?: string;
   };
   availability: Array<{ id: string; availability: string; availableAt: string | null; note: string }>;
   price: DomainResult;

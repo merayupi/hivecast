@@ -17,6 +17,8 @@ export type {
   ReplayConfig,
   ReplayReport,
   DomainResult,
+  BaselineSummary,
+  BankrollSeries,
   AgentSummary,
   AggregateSummary,
   AgentRoundRecord,
