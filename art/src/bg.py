@@ -1,7 +1,7 @@
 """Gate 6: arena-bg.aseprite -- 320x180, static, three layers:
   wall     far honeycomb wall (centre-top 160x40 kept clear for the banner)
-  hall     ledge, floor, side pillars and nine dim hex pedestals on the arc the
-           renderer uses (pedestal art identical to props 'pedestal-dim')
+  hall     ledge, floor and side pillars. Pedestals are not part of the
+           background: the renderer draws one per roster agent from props
   lanterns hanging lanterns with dithered glow and bulb garlands
 
 Usage: python bg.py <out.lua> <aseprite_path> <png_path>
@@ -11,7 +11,6 @@ import os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from flats import PAL  # noqa: E402
-from props import pedestal  # noqa: E402
 
 W, H = 320, 180
 COL = dict(PAL, B='#14101f')  # B = night
@@ -73,11 +72,6 @@ def wall():
     return g
 
 
-def actor_anchor(s, n=9):
-    d = s - (n - 1) / 2
-    return round(160 + d * 34), round(142 + 0.8 * d * d)
-
-
 def hall():
     g = layer()
     # Ledge where the wall meets the floor.
@@ -105,16 +99,6 @@ def hall():
         if y < 5 or 98 <= y <= 101:
             for x in list(range(0, 12)) + list(range(308, 320)):
                 g[y][x] = 'H' if y in (2, 99) else 'A' if y in (3, 100) else 'O'
-    # Nine dim pedestals at the renderer's slot anchors (prop drawn at x-16, y-2).
-    ped = pedestal(False)
-    for s in range(9):
-        ax, ay = actor_anchor(s)
-        for dy, r in enumerate(ped):
-            for dx, c in enumerate(r):
-                if c != '.':
-                    xx, yy = ax - 16 + dx, ay - 2 + dy
-                    if 0 <= xx < W and 0 <= yy < H:
-                        g[yy][xx] = c
     return g
 
 

@@ -320,6 +320,30 @@ test('layout: every roster agent owns its pedestal slot; sitting-out agents stan
   assert.equal(new Set(xs).size, xs.length);
 });
 
+test('layout: a roster without the LLM agent draws eight centred pedestals, no empty ninth', async () => {
+  const { layoutScene, actorAnchor } = await import('../src/arena/renderer');
+  const eight = roster.filter((r) => r.agentId !== 'llm-news');
+  const s = deriveScene({ question: q(4), comparison: cmp(4), roster: eight, nowMs: T0 });
+  const l = layoutScene(s);
+  assert.equal(l.fixed, true);
+  assert.equal(l.pedestals.length, 8);
+  // Every pedestal has an agent standing on it.
+  const feet = [...l.actors, ...l.bench].map((a) => `${a.x},${a.y}`).sort();
+  assert.deepEqual(l.pedestals.map((p) => `${p.x},${p.y}`).sort(), feet);
+  // Roster order is kept, and the arc is centred on the stage (x = 160).
+  const yolo = s.actors.findIndex((a) => a.agentId === 'yolo');
+  assert.deepEqual(l.actors[yolo], actorAnchor(6, 8));
+  assert.equal(l.pedestals[0]!.x + l.pedestals[7]!.x, 320);
+  assert.deepEqual(l.pedestals.map((p) => p.lit), [false, false, true, true, true, true, true, true]);
+});
+
+test('layout: an empty stage keeps all nine pedestals, dim', async () => {
+  const { layoutScene, SLOTS } = await import('../src/arena/renderer');
+  const l = layoutScene({ actors: [], bench: [] });
+  assert.equal(l.pedestals.length, SLOTS);
+  assert.ok(l.pedestals.every((p) => !p.lit));
+});
+
 test('layout: an unknown agent falls back to the packed arc + side bench', async () => {
   const { layoutScene } = await import('../src/arena/renderer');
   const s = deriveScene({ question: q(4), comparison: cmp(4), roster, nowMs: T0 });
