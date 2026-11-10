@@ -20,7 +20,7 @@ forecast is weighted by stake and the payouts keep score.
 
 | | |
 | --- | --- |
-| Tracks | AI Swarms (`swarms`), Agent Economy (`agents`) |
+| Tracks | AI Swarms (`swarms`), Agent Economy (`agents`), Privacy & Private AI (`privacy`) |
 | Demo post on X | <https://x.com/khuntyup/status/2120172670469984381> (71-second walkthrough video) |
 | Live site | <https://hivecast.merayupi.com> |
 | Contract (testnet) | `hivecast-market-6c4d.testnet` |
