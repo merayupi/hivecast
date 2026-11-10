@@ -183,6 +183,8 @@ export function deriveScene(input: SceneInput): Scene {
       return noData(`Unknown phase "${String(q.phase)}".`);
   }
 
+  const notOpenYet = kind === 'open' && nowMs < msOf(q.open_time);
+
   // Participants come only from the comparison (commitment hashes, stakes,
   // Reveals). Without it we still know the count, but show no fake agents.
   const comparisonMatches = comparison !== null && comparison.question_id === q.question_id;
@@ -251,7 +253,7 @@ export function deriveScene(input: SceneInput): Scene {
     let reason: string;
     if (!r.domains.includes(domain)) reason = 'domain not supported';
     else if (outOfCapital(r.accountId, input.economics, input.minStakeYocto)) reason = 'out of capital';
-    else if (kind === 'open') reason = 'not committed yet';
+    else if (kind === 'open') reason = notOpenYet ? 'window not open yet' : 'not committed yet';
     else reason = 'abstained';
     bench.push({
       agentId: r.agentId,
@@ -273,8 +275,15 @@ export function deriveScene(input: SceneInput): Scene {
   let localHour: number | null = null;
   switch (kind) {
     case 'open':
-      banner = 'Commitments open — forecasts are being sealed';
-      subline = `CLOSES ${clockIn(msOf(q.close_time), timeZone)}`;
+      // The contract reports OPEN from creation, but refuses commitments
+      // before open_time: until then the window is only scheduled.
+      if (notOpenYet) {
+        banner = 'Scheduled — the commitment window has not opened yet';
+        subline = `OPENS ${clockIn(msOf(q.open_time), timeZone)}`;
+      } else {
+        banner = 'Commitments open — forecasts are being sealed';
+        subline = `CLOSES ${clockIn(msOf(q.close_time), timeZone)}`;
+      }
       break;
     case 'sealing':
       banner = q.participant_count === 0 ? 'No commitments — this Round will be cancelled' : 'Commitments closed — freezing the swarm forecast';
@@ -375,6 +384,7 @@ export function pickDefaultRound(questions: readonly QuestionView[], nowMs: numb
     newest.find((q) => q.phase === 'resolved') ??
     newest.find((q) => q.phase === 'closed' && q.snapshot_ready && nowMs < msOf(q.observation_start)) ??
     newest.find((q) => q.phase === 'settled') ??
+    newest.find((q) => q.phase === 'open' && nowMs >= msOf(q.open_time)) ??
     newest.find((q) => q.phase === 'open') ??
     newest[0] ??
     null
@@ -401,6 +411,7 @@ export function scheduleBoard(
 export function nextMilestone(q: QuestionView, nowMs: number): { label: string; ns: string } | null {
   switch (q.phase) {
     case 'open':
+      if (nowMs < msOf(q.open_time)) return { label: 'Commitments open', ns: q.open_time };
       return { label: 'Commitments close', ns: q.close_time };
     case 'closed':
       if (nowMs < msOf(q.observation_start)) return { label: q.snapshot_ready ? 'Sales close · event starts' : 'Event starts', ns: q.observation_start };

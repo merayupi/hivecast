@@ -53,7 +53,7 @@ export function QuestionList({
                   </span>
                 ) : null}
                 <SingleAgentMark count={q.participant_count} />
-                {q.snapshot_ready ? <ChipOk label="snapshot ready" /> : null}
+                {onSale(q, now) ? <ChipOk label="on sale" /> : null}
               </div>
               <span className="q-text">{q.text}</span>
               <span className="q-meta small-caps">{questionMeta(q.source)}</span>
@@ -67,6 +67,12 @@ export function QuestionList({
       ))}
     </ul>
   );
+}
+
+/** True while the frozen forecast of this Round can be bought: snapshot published, event not started. */
+function onSale(q: QuestionView, nowMs: number): boolean {
+  if (q.phase !== 'closed' || !q.snapshot_ready || q.participant_count === 0) return false;
+  return BigInt(nowMs) * 1_000_000n < BigInt(q.observation_start);
 }
 
 function ChipOk({ label }: { label: string }) {

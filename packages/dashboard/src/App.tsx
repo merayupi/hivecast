@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Shell } from './components/Shell';
-import { HeroLine, TryItPanel } from './components/Intro';
+import { TryOnTestnet } from './components/Intro';
+import { GuidePage } from './components/Guide';
 import { RationalePanel } from './components/Rationale';
 import { QuestionList } from './components/QuestionList';
 import { QuestionDetail } from './components/QuestionDetail';
 import { BalancePanel } from './components/BalancePanel';
-import { ComparisonPanel, LeaderboardPanel, EconomicsPanel } from './components/Analytics';
+import { ComparisonPanel } from './components/Analytics';
 import { SimulationPanel } from './components/Simulation';
-import { AgentsPanel, DisclosurePanel, AgentRoleNote } from './components/Disclosure';
 import { useWallet } from './lib/useWallet';
 import type { WalletState } from './lib/useWallet';
 import { usePolling } from './lib/hooks';
@@ -16,21 +16,23 @@ import type { QuestionView } from './lib/types';
 import { ArenaView } from './arena/ArenaView';
 import { Hud, TABS, type Tab } from './arena/Hud';
 import { SeasonRace } from './arena/SeasonReplay';
+import { AgentsView } from './arena/AgentsView';
+import { Tour, tourSeen } from './arena/Tour';
 import './arena/arena.css';
-
-type Mode = 'live' | 'simulation' | 'agents' | 'leaderboard' | 'disclosure';
 
 function tabFromHash(): Tab {
   const h = window.location.hash.replace('#', '');
   return (TABS.find((t) => t.id === h)?.id ?? 'arena') as Tab;
 }
 
-/** App shell: pixel HUD + ARENA (default) / LEDGER / SIMULATION / TRUST. */
+/** App shell: pixel HUD + ARENA (default) / ROUNDS / AGENTS / REPLAY / GUIDE, and the first-visit tour. */
 export function App() {
   const wallet = useWallet();
   const { state, connect, disconnect, login } = wallet;
   const [tab, setTabState] = useState<Tab>(tabFromHash);
   const [ledgerFocus, setLedgerFocus] = useState<number | null>(null);
+  // The tour opens by itself once per browser; "How it works" reopens it.
+  const [tourOpen, setTourOpen] = useState(() => !tourSeen());
 
   useEffect(() => {
     const onHash = () => setTabState(tabFromHash());
@@ -58,33 +60,33 @@ export function App() {
 
   return (
     <div className="hive-surface">
-      <Hud config={state.config} tab={tab} onTab={setTab} wallet={walletProps} />
+      <Hud config={state.config} tab={tab} onTab={setTab} onTour={() => setTourOpen(true)} wallet={walletProps} />
+      <Tour open={tourOpen} onClose={() => setTourOpen(false)} onTab={setTab} />
       {tab === 'arena' ? (
         <ArenaView
           config={state.config}
-          onBuy={(id) => {
+          onOpenRound={(id) => {
             setLedgerFocus(id);
             setTab('ledger');
           }}
+          onTab={(t) => {
+            if (t === 'ledger') setLedgerFocus(null);
+            setTab(t);
+          }}
+          onTour={() => setTourOpen(true)}
         />
       ) : tab === 'simulation' ? (
         <SeasonReplayView />
+      ) : tab === 'agents' ? (
+        <AgentsView config={state.config} />
       ) : (
         // The ruled ledger keeps its own light paper theme, shown as a sheet
         // inside the night frame so every tab shares one surface.
         <div className="ledger-sheet">
           {tab === 'ledger' ? (
-            <LedgerApp wallet={wallet} focusId={ledgerFocus} />
+            <RoundsApp wallet={wallet} focusId={ledgerFocus} />
           ) : (
-            <main className="shell-main sheet-pad">
-              <section className="mode-page">
-                <h2 className="ledger-heading">Trust boundary</h2>
-                <DisclosurePanel />
-                <h2 className="ledger-heading">The agents</h2>
-                <AgentRoleNote />
-                <AgentsPanel />
-              </section>
-            </main>
+            <GuidePage onTour={() => setTourOpen(true)} onSimulation={() => setTab('simulation')} />
           )}
         </div>
       )}
@@ -92,7 +94,7 @@ export function App() {
   );
 }
 
-/** SIMULATION: the Season Replay race on the night stage, the replay's accuracy chart and table below. */
+/** REPLAY: the Season Replay race on the night stage, the replay's accuracy chart and table below. */
 function SeasonReplayView() {
   const { data, error, loading } = usePolling(() => api.simulation(), 60_000, []);
   const [domain, setDomain] = useState<'price' | 'weather'>('price');
@@ -114,10 +116,9 @@ function SeasonReplayView() {
   );
 }
 
-/** Today's ruled-ledger dashboard, unchanged, as the LEDGER tab. */
-function LedgerApp({ wallet, focusId }: { wallet: ReturnType<typeof useWallet>; focusId: number | null }) {
+/** ROUNDS: the ruled-ledger Round list, detail and buy flow. */
+function RoundsApp({ wallet, focusId }: { wallet: ReturnType<typeof useWallet>; focusId: number | null }) {
   const { state, connect, disconnect, login } = wallet;
-  const [mode, setMode] = useState<Mode>('live');
   const [domain, setDomain] = useState<'all' | 'price' | 'weather'>('all');
   const [selectedId, setSelectedId] = useState<number | null>(focusId);
   const { data: questions } = usePolling(() => api.allQuestions(), 15_000, []);
@@ -135,8 +136,6 @@ function LedgerApp({ wallet, focusId }: { wallet: ReturnType<typeof useWallet>; 
   return (
     <Shell
       config={state.config}
-      mode={mode}
-      onMode={setMode}
       accountId={state.accountId}
       authenticated={state.status === 'authenticated'}
       connecting={state.status === 'connecting'}
@@ -147,40 +146,15 @@ function LedgerApp({ wallet, focusId }: { wallet: ReturnType<typeof useWallet>; 
       error={state.error}
       embedded
     >
-      {mode === 'live' ? (
-        <LiveView
-          domain={domain}
-          setDomain={setDomain}
-          selected={selected}
-          selectedId={selectedId}
-          setSelectedId={setSelectedId}
-          walletState={state}
-          onLogin={() => void login()}
-          onSimulation={() => setMode('simulation')}
-        />
-      ) : mode === 'simulation' ? (
-        <SimulationPanel />
-      ) : mode === 'leaderboard' ? (
-        <section className="mode-page">
-          <h2 className="ledger-heading">Global leaderboard</h2>
-          <LeaderboardPanel />
-          <div className="economics-section">
-            <h3 className="ledger-heading">Agent economics</h3>
-            <EconomicsPanel />
-          </div>
-        </section>
-      ) : mode === 'agents' ? (
-        <section className="mode-page">
-          <h2 className="ledger-heading">The agents</h2>
-          <AgentRoleNote />
-          <AgentsPanel />
-        </section>
-      ) : (
-        <section className="mode-page">
-          <h2 className="ledger-heading">Trust boundary</h2>
-          <DisclosurePanel />
-        </section>
-      )}
+      <LiveView
+        domain={domain}
+        setDomain={setDomain}
+        selected={selected}
+        selectedId={selectedId}
+        setSelectedId={setSelectedId}
+        walletState={state}
+        onLogin={() => void login()}
+      />
     </Shell>
   );
 }
@@ -193,7 +167,6 @@ function LiveView({
   setSelectedId,
   walletState,
   onLogin,
-  onSimulation,
 }: {
   domain: 'all' | 'price' | 'weather';
   setDomain: (d: 'all' | 'price' | 'weather') => void;
@@ -202,59 +175,70 @@ function LiveView({
   setSelectedId: (id: number | null) => void;
   walletState: WalletState;
   onLogin: () => void;
-  onSimulation: () => void;
 }) {
   return (
     <>
-    <HeroLine />
-    <div className="live-view">
-      <div className="live-list">
-        <div className="list-head">
-          <h2 className="ledger-heading">Rounds</h2>
-          <div className="domain-tabs" role="tablist" aria-label="Domain filter">
-            {(['all', 'price', 'weather'] as const).map((d) => (
-              <button
-                key={d}
-                type="button"
-                role="tab"
-                aria-selected={domain === d}
-                className={`btn ${domain === d ? '' : 'btn-ghost'}`}
-                onClick={() => setDomain(d)}
-              >
-                {d}
-              </button>
-            ))}
+      <div className="hero-line rule-b">
+        <p className="hero-pitch">Every Round on the contract. Pick one to see its schedule, buy the forecast, or check the Reveals.</p>
+        <p className="muted-line">
+          A Round marked <span className="chip text-state-ok">on sale</span> can be bought now, until its event starts. Finished
+          Rounds are free to read.
+        </p>
+      </div>
+      <div className="live-view">
+        <div className="live-list">
+          <div className="list-head">
+            <h2 className="ledger-heading">Rounds</h2>
+            <div className="domain-tabs" role="tablist" aria-label="Domain filter">
+              {(['all', 'price', 'weather'] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  role="tab"
+                  aria-selected={domain === d}
+                  className={`btn ${domain === d ? '' : 'btn-ghost'}`}
+                  onClick={() => setDomain(d)}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
           </div>
+          <QuestionList domain={domain} onSelect={setSelectedId} selectedId={selectedId} />
         </div>
-        <QuestionList domain={domain} onSelect={setSelectedId} selectedId={selectedId} />
+        <div className="live-detail">
+          {selected ? (
+            <>
+              <QuestionDetail q={selected} wallet={walletState} />
+              {walletState.accountId && walletState.config ? (
+                <BalancePanel
+                  accountId={walletState.accountId}
+                  contractId={walletState.config.contractId}
+                  networkId={walletState.config.networkId}
+                  onAuthRequired={onLogin}
+                />
+              ) : null}
+              {selected.phase === 'resolved' || selected.phase === 'settled' || selected.phase === 'cancelled' ? (
+                <ComparisonPanel questionId={selected.question_id} />
+              ) : null}
+              {selected.phase === 'resolved' || selected.phase === 'settled' ? (
+                <RationalePanel questionId={selected.question_id} />
+              ) : null}
+            </>
+          ) : (
+            <div className="detail-empty">
+              <h2 className="ledger-heading empty-title">Select a Round</h2>
+              <p className="muted-line">Its schedule, the buy button and every revealed forecast open here.</p>
+              <div className="try-panel">
+                <section>
+                  <h2 className="ledger-heading">Buying a forecast, step by step</h2>
+                  <TryOnTestnet />
+                </section>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-      <div className="live-detail">
-        {selected ? (
-          <>
-            <QuestionDetail q={selected} wallet={walletState} />
-            {walletState.accountId && walletState.config ? (
-              <BalancePanel
-                accountId={walletState.accountId}
-                contractId={walletState.config.contractId}
-                networkId={walletState.config.networkId}
-                onAuthRequired={onLogin}
-              />
-            ) : null}
-            {selected.phase === 'resolved' || selected.phase === 'settled' || selected.phase === 'cancelled' ? (
-              <ComparisonPanel questionId={selected.question_id} />
-            ) : null}
-            {selected.phase === 'resolved' || selected.phase === 'settled' ? (
-              <RationalePanel questionId={selected.question_id} />
-            ) : null}
-          </>
-        ) : (
-          <div className="detail-empty">
-            <p className="muted-line">Select a Round on the left to see its schedule, buy access, or compare Reveals.</p>
-            <TryItPanel onSimulation={onSimulation} />
-          </div>
-        )}
-      </div>
-    </div>
     </>
   );
 }
