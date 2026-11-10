@@ -268,6 +268,23 @@ npm run sandbox:source --workspace @hivecast/runner                  # Linux: re
   recorded in the input disclosure, not silently dropped. Every fetch persists
   exact evidence (raw response + hash + model/grid/units/timestamp).
 
+## RPC endpoints and failover
+
+`rpcUrl` is the primary NEAR RPC endpoint. `rpcFallbackUrls` (optional) lists
+further endpoints, tried in order when the active one is unavailable: an HTTP
+429 / 5xx / 408 answer, a network error, an unsupported method. The endpoint
+that answered stays active; the primary is tried again after five minutes.
+
+- Only availability failures fail over. A definitive answer from the chain
+  (stale nonce, expired transaction, unknown transaction, missing account) is
+  passed through unchanged, because the runner branches on those errors.
+- Re-sending the same signed transaction to another endpoint cannot execute it
+  twice: the chain identifies a transaction by its hash.
+- Each endpoint is retried briefly (3 attempts, about 2 s) on 5xx / 408 before
+  the next one is used.
+- Logs (`[rpc] hostA -> hostB: reason`) and public 503 bodies name hosts only,
+  so an API key in an RPC URL is not disclosed.
+
 ## Live-only LLM agent (`llm-news`)
 
 Optional. Create and fund the sub-account once (testnet only; writes its key to

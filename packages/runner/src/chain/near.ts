@@ -21,8 +21,17 @@ import type {
   QuestionView,
 } from '../types.js';
 import type { CallOutcome, ChainClient, PreparedCall, QuestionSpecArgs, TxFinalStatusView } from './types.js';
+import { failover, rpcHost } from './failover.js';
 
 const DEFAULT_GAS = teraToGas('50');
+
+/**
+ * Per-endpoint retries on HTTP 5xx / 408. Kept short (about 2 s in total): with
+ * a fallback configured the next endpoint answers sooner than twelve retries
+ * on a failing one, and without a fallback the caller's own next poll or tick
+ * is the retry.
+ */
+const RPC_RETRY = { retries: 3, wait: 400, backoff: 2 } as const;
 const SETTLE_GAS = teraToGas('200');
 
 function decodeSignedTransactionBytes(base64: string): SignedTransaction {
@@ -96,6 +105,9 @@ function extractError(status: unknown, receiptsOutcome: unknown): string | null 
 export class NearChainClient implements ChainClient {
   readonly contractId: string;
   private provider: JsonRpcProvider;
+  /** Hosts of the configured RPC endpoints, primary first. Never the full URL (it may carry an API key). */
+  private rpcHosts: string;
+  private rpcUrls: readonly string[];
   private config: RunnerConfig;
   private accounts = new Map<string, Account>();
   private storageCostPerByte: bigint | null = null;
@@ -103,7 +115,30 @@ export class NearChainClient implements ChainClient {
   constructor(config: RunnerConfig) {
     this.contractId = config.contractId;
     this.config = config;
-    this.provider = new JsonRpcProvider({ url: config.rpcUrl });
+    const urls = [config.rpcUrl, ...(config.rpcFallbackUrls ?? [])];
+    const providers = urls.map((url) => new JsonRpcProvider({ url }, RPC_RETRY));
+    this.rpcUrls = urls;
+    this.rpcHosts = urls.map(rpcHost).join(', ');
+    this.provider =
+      providers.length === 1
+        ? providers[0]!
+        : failover(providers, {
+            onSwitch: (from, to, err) => {
+              const why = err instanceof Error ? `: ${this.redact(err.message).replace(/\s+/g, ' ').slice(0, 160)}` : '';
+              process.stderr.write(`[rpc] ${rpcHost(urls[from]!)} -> ${rpcHost(urls[to]!)}${why}\n`);
+            },
+          });
+  }
+
+  /**
+   * An RPC error message with every configured endpoint URL reduced to its
+   * host. Provider errors can quote the full URL, which may carry an API key,
+   * and these messages reach logs and public 503 bodies.
+   */
+  private redact(message: string): string {
+    let out = message;
+    for (const url of this.rpcUrls) out = out.split(url).join(rpcHost(url));
+    return out;
   }
 
   /** Bound a read-only RPC call so a hanging/rate-limited endpoint surfaces as
@@ -116,7 +151,7 @@ export class NearChainClient implements ChainClient {
         op(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () => reject(new ChainUnavailableError(`${label} timed out after ${this.config.rpcTimeoutMs}ms (${this.config.rpcUrl})`)),
+            () => reject(new ChainUnavailableError(`${label} timed out after ${this.config.rpcTimeoutMs}ms (${this.rpcHosts})`)),
             this.config.rpcTimeoutMs,
           );
         }),
@@ -177,7 +212,7 @@ export class NearChainClient implements ChainClient {
         throw err;
       }
       throw new ChainUnavailableError(
-        `RPC view ${method} unavailable (${this.config.rpcUrl}): ${(err as Error).message}`,
+        `RPC view ${method} unavailable (${this.rpcHosts}): ${this.redact((err as Error).message)}`,
       );
     }
     return result as T;
@@ -228,7 +263,7 @@ export class NearChainClient implements ChainClient {
           txHash: canonicalHash,
           success: false,
           result: null,
-          error: (err as Error).message,
+          error: this.redact((err as Error).message),
           status: 'failure',
           nonceStale: true,
         };
@@ -241,7 +276,7 @@ export class NearChainClient implements ChainClient {
           txHash: canonicalHash,
           success: false,
           result: null,
-          error: (err as Error).message,
+          error: this.redact((err as Error).message),
           status: 'failure',
           txExpired: true,
         };
@@ -249,7 +284,7 @@ export class NearChainClient implements ChainClient {
       // Uncertain network error: inclusion status is unknown. Keep the
       // CANONICAL hash so the journal/receipt lookup stays correct while the
       // runner rebroadcasts the same signed transaction (never re-sign).
-      return { txHash: canonicalHash, success: false, result: null, error: (err as Error).message, status: 'uncertain' };
+      return { txHash: canonicalHash, success: false, result: null, error: this.redact((err as Error).message), status: 'uncertain' };
     }
   }
 
@@ -414,7 +449,7 @@ export class NearChainClient implements ChainClient {
       // availability problem and must surface as unavailable, never as a
       // silently-suppressed "no proof".
       throw new ChainUnavailableError(
-        `viewAccessKeyPermission unavailable for ${accountId}: ${(err as Error).message}`,
+        `viewAccessKeyPermission unavailable for ${accountId}: ${this.redact((err as Error).message)}`,
       );
     }
   }
@@ -448,7 +483,7 @@ export class NearChainClient implements ChainClient {
       // Transient RPC/chain availability or a non-definitive tx error → surface
       // as unavailable (503), never conflated with "no such transaction".
       throw new ChainUnavailableError(
-        `viewTxFinalStatus unavailable for ${txHash}: ${(err as Error).message}`,
+        `viewTxFinalStatus unavailable for ${txHash}: ${this.redact((err as Error).message)}`,
       );
     }
 
@@ -525,7 +560,7 @@ export class NearChainClient implements ChainClient {
       );
     } catch (err) {
       if (err instanceof UnknownTransactionError) return null;
-      throw new ChainUnavailableError(`viewTxBlockTime unavailable for ${txHash}: ${(err as Error).message}`);
+      throw new ChainUnavailableError(`viewTxBlockTime unavailable for ${txHash}: ${this.redact((err as Error).message)}`);
     }
     if (typeof res !== 'object' || res === null) {
       throw new ChainUnavailableError(`viewTxBlockTime returned a malformed status for ${txHash}`);
@@ -540,7 +575,7 @@ export class NearChainClient implements ChainClient {
     try {
       block = await this.withReadTimeout(`viewBlock(${blockHash})`, () => this.provider.viewBlock({ blockId: blockHash }));
     } catch (err) {
-      throw new ChainUnavailableError(`viewBlock unavailable for ${blockHash}: ${(err as Error).message}`);
+      throw new ChainUnavailableError(`viewBlock unavailable for ${blockHash}: ${this.redact((err as Error).message)}`);
     }
     const ts = (block as { header?: { timestamp_nanosec?: unknown } })?.header?.timestamp_nanosec;
     if (typeof ts !== 'string' || !/^\d+$/.test(ts)) {
