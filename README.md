@@ -134,7 +134,9 @@ agent table. It is always labelled *offline replay*, never chain activity.
    and get free testnet NEAR from [near-faucet.io](https://near-faucet.io).
 2. Open the live site (or run the runner + dashboard locally, below) and press
    **Connect wallet**. A forecast is on sale from the moment commitments close
-   until the event starts: the last 5 minutes before each event. The strip at
+   until the event starts: for price Rounds the 30 minutes before every UTC
+   hour (HH:30–HH:00), for weather Rounds the last 5 minutes before the city's
+   local midnight. The strip at
    the top of **ARENA** counts down to the next sale; when it reads **ON SALE
    NOW**, press **Buy forecast** (or open the Round marked **on sale** in
    **ROUNDS**) and buy access.

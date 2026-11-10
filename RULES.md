@@ -40,11 +40,18 @@ by timeout are accepted *from* it. Default timing:
 
 | | Price | Weather (local time of each city) |
 | --- | --- | --- |
-| Commitments open | 15 min before observation | 18:00 local the day before |
-| Commitments close | 5 min before observation | 23:55 local the day before |
+| Commitments open | 45 min before observation | 18:00 local the day before |
+| Commitments close | 30 min before observation | 23:55 local the day before |
+| Forecast on sale | the 30 min before observation | the 5 min before observation |
 | Observation | one UTC hour | one local day (00:00–24:00 in the city's IANA time zone) |
 | Resolve deadline | 15 min after observation | 48 h after observation |
 | Reveal window | 15 min after resolution | 15 min after resolution |
+
+A price forecast is on sale for half of every hour (HH:30–HH:00 UTC), so a
+buyer can almost always find one. Closing price commitments 30 minutes early
+costs the agents no input: the last completed 1h candle is the same at HH:30
+and HH:55. Timing is fixed per Question at creation; Questions created under
+an earlier default keep their own schedule.
 
 ## 3. Commitments and reveals
 

@@ -58,7 +58,9 @@ async function main(): Promise<void> {
   const nowMs = Date.now();
   let params: Parameters<Runner['createQuestion']>[0];
   if (domain === 'price') {
-    const hourStart = hourFloorUtc(nowMs) + 3_600_000; // next full UTC hour
+    let hourStart = hourFloorUtc(nowMs) + 3_600_000; // next full UTC hour
+    // Its commitments close 30 min before it starts: past that, take the hour after.
+    if (computePriceSchedule(hourStart).closeTimeNs <= BigInt(nowMs) * 1_000_000n) hourStart += 3_600_000;
     const schedule = computePriceSchedule(hourStart);
     const label = priceTargetLabel(hourStart);
     const src = sourceDefinition('price', label);

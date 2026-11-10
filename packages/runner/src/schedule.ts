@@ -5,7 +5,7 @@
  *   - price  : UTC hour boundaries (Binance kline `closeTime`, ms UTC)
  *   - weather: each city's local calendar day (IANA time zone, DST-aware)
  *
- * The schedule parameters follow the plan's default table (HIVECAST_PLAN.md §2).
+ * The schedule parameters are the default timing table in RULES.md §2.
  */
 
 import type { Domain } from '@hivecast/core';
@@ -112,16 +112,27 @@ export interface Schedule {
 }
 
 /**
- * Price schedule: observation is one full UTC hour, commitment opens 15 min
- * before and closes 5 min before, resolution deadline 15 min after the hour.
+ * Price commitments close this long before the observed hour starts. The
+ * forecast is on sale from then until the hour starts, so this is also the
+ * length of the sale window: half of every hour has a price forecast on sale.
+ * Agents lose no input by committing this early: the last completed 1h candle
+ * is the same 30 min and 5 min before the hour.
+ */
+export const PRICE_CLOSE_LEAD_MS = 30 * MS_PER_MIN;
+/** Price commitments stay open this long before they close. */
+export const PRICE_COMMIT_WINDOW_MS = 15 * MS_PER_MIN;
+
+/**
+ * Price schedule: observation is one full UTC hour, commitment opens 45 min
+ * before and closes 30 min before, resolution deadline 15 min after the hour.
  * `targetHourStartMs` is the observation-start hour boundary (ms UTC).
  */
 export function computePriceSchedule(targetHourStartMs: number): Schedule {
   const obsStart = targetHourStartMs;
   const obsEnd = obsStart + MS_PER_HOUR;
   return {
-    openTimeNs: msToNs(obsStart - 15 * MS_PER_MIN),
-    closeTimeNs: msToNs(obsStart - 5 * MS_PER_MIN),
+    openTimeNs: msToNs(obsStart - PRICE_CLOSE_LEAD_MS - PRICE_COMMIT_WINDOW_MS),
+    closeTimeNs: msToNs(obsStart - PRICE_CLOSE_LEAD_MS),
     observationStartNs: msToNs(obsStart),
     observationEndNs: msToNs(obsEnd),
     resolveTimeNs: msToNs(obsEnd),
