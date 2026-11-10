@@ -136,7 +136,8 @@ html, body { background: var(--hive-night); }
 .arena-rail { display: grid; gap: 1rem; min-width: 0; }
 .arena-below {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Two or three panels: they share the row instead of leaving a hole. */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1.25rem;
   align-items: start;
 }
@@ -185,7 +186,7 @@ html, body { background: var(--hive-night); }
 .stage-caption { display: grid; gap: 0.15rem; }
 .banner-text { font-size: 1.05rem; color: var(--hive-wax); margin: 0; }
 .subline { font-size: 0.78rem; color: var(--hive-honey); margin: 0; }
-.envelope-readout { font-size: 0.8rem; min-height: 1.3em; color: var(--hive-wax); }
+.envelope-readout { font-size: 0.8rem; color: var(--hive-wax); }
 
 /* ---- Panels -------------------------------------------------------------- */
 .hive-panel {
@@ -325,3 +326,292 @@ html, body { background: var(--hive-night); }
 .race-controls .speed { display: flex; gap: 0.3rem; }
 .hive-btn.ghost.is-on { background: var(--hive-violet); border-color: var(--hive-honey); color: var(--hive-honey); }
 .scrub { flex: 1 1 200px; min-width: 0; accent-color: var(--hive-honey); }
+
+/* ---- Help button, panel heads ------------------------------------------- */
+.hud-help {
+  font-family: var(--font-pixel);
+  font-size: 0.9rem;
+  color: var(--hive-honey);
+  background: transparent;
+  border: 2px solid var(--hive-dusk);
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hud-help:hover { border-color: var(--hive-honey); color: var(--hive-wax); }
+.hud-help:focus-visible, .panel-link:focus-visible, .tour-skip:focus-visible, .fold > summary:focus-visible {
+  outline: 2px solid var(--hive-sky);
+  outline-offset: 2px;
+}
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.panel-link {
+  font-family: var(--font-pixel);
+  font-size: 0.82rem;
+  color: var(--hive-sky);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.panel-link:hover { color: var(--hive-wax); text-decoration: underline; }
+.feed-more { margin-top: 0.5rem; }
+.feed-lead { margin: -0.2rem 0 0.4rem; }
+
+/* ---- Next forecast sale -------------------------------------------------- */
+.sale-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--hive-cream);
+  background: var(--hive-deep);
+  border: 2px solid var(--hive-violet);
+}
+.sale-strip.is-on { border-color: var(--hive-honey); }
+.sale-strip.is-idle { color: var(--hive-ash); }
+.sale-strip b { color: var(--hive-wax); font-weight: 600; }
+.sale-tag {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  color: var(--hive-night);
+  background: var(--hive-ash);
+  padding: 0.05rem 0.45rem;
+  white-space: nowrap;
+}
+.sale-strip.is-on .sale-tag { background: var(--hive-honey); }
+.sale-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; }
+.sale-strip .hive-btn { font-size: 0.8rem; padding: 0.1rem 0.55rem; }
+.sale-strip .hive-btn:not(.ghost) { font-size: 0.9rem; padding: 0.2rem 0.7rem; }
+.sale-actions > .muted { font-size: 0.78rem; }
+
+/* ---- What this site is, in one line -------------------------------------- */
+.arena-lead { margin: 0; font-size: 0.9rem; line-height: 1.45; color: var(--hive-cream); }
+.arena-lead b { color: var(--hive-wax); font-weight: 600; }
+/* The question sits in the Round card beside the stage; shown here only once the layout stacks. */
+.stage-question { display: none; margin: 0; font-size: 0.92rem; line-height: 1.4; color: var(--hive-wax); }
+@media (max-width: 1100px) {
+  .stage-question { display: block; }
+  .round-card .round-q { display: none; }
+}
+
+/* ---- Round steps and guidance ------------------------------------------- */
+.round-guide { display: grid; gap: 0.55rem; }
+.steps {
+  list-style: none;
+  margin: 0 0 0.15rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.step {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 0.3rem;
+  text-align: center;
+  color: var(--hive-ash);
+}
+/* Connector from the previous step's dot to this one. */
+.step + .step::before {
+  content: "";
+  position: absolute;
+  top: 0.7rem;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--hive-violet);
+}
+.step.is-done::before, .step.is-current::before { background: var(--hive-honey); }
+.step-dot {
+  position: relative;
+  z-index: 1;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  color: var(--hive-ash);
+  background: var(--hive-deep);
+  border: 2px solid var(--hive-dusk);
+}
+.step-label { font-size: 0.78rem; line-height: 1.15; }
+.step.is-done { color: var(--hive-cream); }
+.step.is-done .step-dot { color: var(--hive-night); background: var(--hive-dusk); border-color: var(--hive-honey); }
+.step.is-current { color: var(--hive-honey); }
+.step.is-current .step-dot {
+  color: var(--hive-night);
+  background: var(--hive-honey);
+  border-color: var(--hive-wax);
+  box-shadow: 0 0 0 3px var(--hive-violet);
+}
+.step.is-skipped .step-label { text-decoration: line-through; }
+.guide-line {
+  display: grid;
+  grid-template-columns: 4.6rem minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: baseline;
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--hive-wax);
+}
+.guide-tag { font-size: 0.78rem; text-transform: uppercase; color: var(--hive-honey); }
+.round-guide .hive-btn.buy { margin-top: 0.1rem; padding: 0.4rem 0.7rem; font-size: 1rem; }
+.round-guide .fine { margin: 0; }
+.envelope-readout:empty { display: none; }
+
+/* ---- Tour ---------------------------------------------------------------- */
+.portrait { display: inline-block; flex: none; overflow: hidden; }
+.portrait-px {
+  display: block;
+  width: 24px;
+  height: 24px;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  transform-origin: top left;
+}
+.tour-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(11, 10, 16, 0.82);
+  overflow-y: auto;
+}
+.tour {
+  width: min(100%, 34rem);
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.1rem 1.25rem 1.2rem;
+  color: var(--hive-cream);
+  background: var(--hive-deep);
+  border: 2px solid var(--hive-honey);
+  box-shadow: 6px 6px 0 var(--hive-ink);
+}
+.tour-head { display: flex; align-items: center; justify-content: space-between; }
+.tour-count { font-size: 0.75rem; color: var(--hive-ash); }
+.tour-skip {
+  font-size: 0.8rem;
+  color: var(--hive-ash);
+  background: none;
+  border: none;
+  padding: 0.1rem 0.2rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.tour-skip:hover { color: var(--hive-wax); }
+.tour-title { margin: 0; font-size: 1.5rem; line-height: 1.15; color: var(--hive-honey); }
+.tour-body { display: grid; gap: 0.6rem; min-height: 13.5rem; align-content: start; font-size: 0.95rem; line-height: 1.5; }
+.tour-body p { margin: 0; max-width: 60ch; }
+.tour-body b { color: var(--hive-wax); }
+.tour-body a { color: var(--hive-sky); text-decoration: underline; }
+.tour-cast { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.tour-note { font-size: 0.82rem; color: var(--hive-ash); }
+.tour-role { padding: 0.4rem 0.6rem; border: 2px solid var(--hive-violet); background: var(--hive-night); }
+.tour-role b { color: var(--hive-honey); }
+.tour-steps, .tour-list { margin: 0; padding-left: 1.3rem; display: grid; gap: 0.45rem; }
+.tour-steps li::marker { font-family: var(--font-pixel); color: var(--hive-honey); }
+.tour-list li::marker { color: var(--hive-honey); }
+.tour-tabs { margin: 0; display: grid; gap: 0.5rem; }
+.tour-tabs > div { display: grid; grid-template-columns: 5.2rem minmax(0, 1fr); gap: 0.75rem; align-items: baseline; }
+.tour-tabs dt { color: var(--hive-honey); font-size: 0.95rem; }
+.tour-tabs dd { margin: 0; }
+.tour-dots { display: flex; justify-content: center; gap: 0.4rem; }
+.tour-dots span { width: 0.5rem; height: 0.5rem; background: var(--hive-violet); }
+.tour-dots span.is-on { background: var(--hive-honey); }
+.tour-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+.tour-end { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.tour .hive-btn { font-size: 1rem; padding: 0.35rem 0.9rem; }
+
+/* ---- Agents page --------------------------------------------------------- */
+.agents-page { padding-bottom: 0.5rem; }
+.page-head { display: grid; gap: 0.45rem; justify-items: start; }
+.page-title { margin: 0; font-size: 1.6rem; line-height: 1.1; color: var(--hive-honey); }
+.page-lead { margin: 0; max-width: 68ch; font-size: 0.95rem; line-height: 1.5; color: var(--hive-cream); }
+.agent-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr));
+  gap: 1rem;
+}
+.agent-card { display: grid; gap: 0.55rem; align-content: start; }
+.agent-card-head { display: flex; gap: 0.75rem; align-items: flex-start; }
+.agent-id { display: grid; gap: 0.25rem; min-width: 0; }
+.agent-name { margin: 0; font-size: 1.15rem; line-height: 1.1; color: var(--hive-wax); }
+.agent-rank { color: var(--hive-honey); font-size: 0.8rem; }
+.agent-account { font-size: 0.74rem; color: var(--hive-sky); overflow-wrap: anywhere; }
+.agent-account:hover { text-decoration: underline; }
+.agent-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.domain-chip {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.05rem 0.35rem;
+  color: var(--hive-ash);
+  border: 1px solid currentColor;
+}
+.domain-price { color: var(--hive-honey); }
+.domain-weather { color: var(--hive-sky); }
+.agent-motto { margin: 0; font-size: 0.85rem; font-style: italic; color: var(--hive-ash); }
+.agent-how { margin: 0; font-size: 0.88rem; line-height: 1.45; color: var(--hive-cream); }
+.agent-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0.15rem 0 0;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--hive-violet);
+}
+.agent-stats dt { font-size: 0.7rem; color: var(--hive-ash); }
+.agent-stats dd { margin: 0.1rem 0 0; font-size: 0.9rem; color: var(--hive-wax); }
+.agent-broke { margin: 0; font-size: 0.78rem; }
+
+/* ---- Light-sheet pages: folds and the guide ------------------------------ */
+.fold { border-top: 1px solid var(--color-ink-900); padding: 0.7rem 0; }
+.fold:last-child { border-bottom: 1px solid var(--color-ink-900); }
+.fold > summary { cursor: pointer; font-size: 1.05rem; }
+.fold[open] > summary { margin-bottom: 0.9rem; }
+.guide { display: grid; gap: 1.5rem; }
+.guide > h2 { margin: 0.5rem 0 -0.75rem; }
+.guide-lead { display: grid; gap: 0.8rem; justify-items: start; padding-bottom: 1.5rem; border-bottom: 1px solid var(--color-ink-900); }
+.guide-lead h2 { margin: 0; }
+.guide-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.75rem 2.5rem; }
+.guide-grid section { display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; }
+.guide-grid h2 { margin: 0; font-size: 1.1rem; }
+.guide-grid .btn { align-self: flex-start; }
+.glossary { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 2.5rem; }
+.glossary > div { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 0.75rem; padding: 0.5rem 0; border-color: var(--color-ink-300); }
+.glossary dt { font-weight: 600; font-size: 0.88rem; }
+.glossary dd { margin: 0; font-size: 0.88rem; color: var(--color-ink-700); }
+.guide-trust-lead { margin-top: -0.25rem; }
+.detail-empty .muted-line { margin-bottom: 0.5rem; }
+
+@media (max-width: 760px) {
+  .guide-grid, .glossary { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+  .hud-wallet { width: 100%; }
+  .step-label { font-size: 0.68rem; }
+  .guide-line { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
+  .sale-actions { margin-left: 0; }
+  .tour { padding: 0.9rem 0.9rem 1rem; }
+  .tour-title { font-size: 1.3rem; }
+  .tour-body { min-height: 0; }
+  .glossary > div { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
+  .agent-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-help, .panel-link { transition: none; }
+}

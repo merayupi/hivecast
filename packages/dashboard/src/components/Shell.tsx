@@ -22,7 +22,7 @@ const MODES: Array<{ id: Mode; label: string }> = [
  */
 export function Shell({
   config,
-  mode,
+  mode = 'live',
   onMode,
   accountId,
   authenticated,
@@ -36,8 +36,8 @@ export function Shell({
   embedded = false,
 }: {
   config: PublicConfig | null;
-  mode: Mode;
-  onMode: (m: Mode) => void;
+  mode?: Mode;
+  onMode?: (m: Mode) => void;
   accountId: string | null;
   authenticated: boolean;
   connecting: boolean;
@@ -47,7 +47,10 @@ export function Shell({
   loginBusy: boolean;
   error: string | null;
   children: React.ReactNode;
-  /** Inside the Arena app shell (LEDGER tab): the HUD replaces the top bar. */
+  /**
+   * Inside the Arena app shell (ROUNDS tab): the HUD replaces the top bar and
+   * its tabs replace the mode strip.
+   */
   embedded?: boolean;
 }) {
   const networkId = config?.networkId ?? 'testnet';
@@ -83,19 +86,21 @@ export function Shell({
       </header>
       )}
 
-      <nav className="mode-strip" aria-label="Mode">
-        {MODES.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            className={`mode-tab ${mode === m.id ? 'is-active' : ''}`}
-            aria-current={mode === m.id ? 'page' : undefined}
-            onClick={() => onMode(m.id)}
-          >
-            {m.label}
-          </button>
-        ))}
-      </nav>
+      {embedded ? null : (
+        <nav className="mode-strip" aria-label="Mode">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={`mode-tab ${mode === m.id ? 'is-active' : ''}`}
+              aria-current={mode === m.id ? 'page' : undefined}
+              onClick={() => onMode?.(m.id)}
+            >
+              {m.label}
+            </button>
+          ))}
+        </nav>
+      )}
 
       {error ? (
         <div className="shell-error">

@@ -169,6 +169,18 @@ test('OPEN → seal story with SEALED n/m and hashes from the comparison', () =>
   assert.equal(s.bench.find((b) => b.agentId === 'llm-news')?.reason, 'not committed yet');
 });
 
+test('OPEN before open_time → scheduled, never "commitments open"', () => {
+  const question = synthetic({ phase: 'open', participant_count: 0 });
+  const nowMs = T0 - 60 * 60_000; // 45 min before open_time
+  const s = deriveScene({ question, comparison: { ...syntheticComparison(question, []), participants: [] }, roster, nowMs });
+  assert.equal(s.kind, 'open');
+  assert.match(s.banner, /^Scheduled/);
+  assert.match(s.subline ?? '', /^OPENS /);
+  assert.equal(s.bench.find((b) => b.agentId === 'yolo')?.reason, 'window not open yet');
+  assert.deepEqual(nextMilestone(question, nowMs), { label: 'Commitments open', ns: question.open_time });
+  assert.equal(nextMilestone(question, T0 - 10 * 60_000)?.label, 'Commitments close');
+});
+
 test('CLOSED splits into sealing → snapshot sale → observing → awaiting outcome by schedule', () => {
   const sealing = deriveScene({ question: synthetic({}), comparison: null, roster, nowMs: T0 - 60_000 });
   assert.equal(sealing.kind, 'sealing');

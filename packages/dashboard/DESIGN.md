@@ -5,12 +5,31 @@
 ## Two surfaces
 
 The dashboard has two visual worlds under one pixel HUD (wordmark HIVECAST,
-`TESTNET · <contract>` chip, tabs, wallet): the **Hive Arena** (ARENA and
-the SIMULATION race) and the **ruled ledger** (LEDGER and TRUST, plus the
-replay's charts and table under the race). The ledger keeps its own light
-paper theme and is shown as a sheet inside the Arena's night frame, so every
-tab shares one surface. Everything below "World" describes the ledger and is
-unchanged.
+`TESTNET · <contract>` chip, tabs, "? How it works", wallet): the **Hive
+Arena** (ARENA, AGENTS and the REPLAY race) and the **ruled ledger** (ROUNDS
+and GUIDE, plus the replay's charts and table under the race). The ledger
+keeps its own light paper theme and is shown as a sheet inside the Arena's
+night frame, so every tab shares one surface. Everything below "World"
+describes the ledger and is unchanged.
+
+Tabs are named for what a visitor finds there; hash ids stay stable for old
+links: ARENA, ROUNDS (`#ledger`), AGENTS (`#agents`), REPLAY (`#simulation`),
+GUIDE (`#trust`).
+
+## Orientation
+
+A visitor does not bet; the agents do. Three things say so without a click:
+
+- **Tour:** a five-step modal on the first visit (remembered in
+  `localStorage`), reopened from "? How it works".
+- **Arena lead:** one sentence above the stage with the visitor's role.
+- **Sale strip:** the next forecast sale with a countdown; while a forecast is
+  on sale it carries the primary **Buy forecast** button, which opens that
+  Round in ROUNDS.
+
+Under the stage, the **Round steps** bar shows Commit → Forecast on sale →
+Event → Reveal → Payout with a NOW line and a YOU CAN line, derived only from
+the Round's on-chain schedule and phase (`guide.ts`).
 
 ## The Hive Arena
 
@@ -29,14 +48,14 @@ unchanged.
   smoothing off, positions on whole pixels. requestAnimationFrame, paused while
   the tab is hidden. `prefers-reduced-motion` shows the final frame of each
   story: static poses, no particles. The canvas is `aria-hidden`; every fact on
-  it is repeated in the DOM (caption, *On stage* table, Round card).
-- **Layout:** stage + right-rail Round card (question, domain/city, phase,
-  countdown in the event's own time zone, participants, total stake, Buy when
-  the snapshot is on sale, which opens that Round in LEDGER) and Schedule
-  board; below, Hall of Fame, Herald's Scroll (the LLM agent's revealed
-  rationale and headlines) and the On NEAR feed. Under 1100px everything
-  stacks; at 390px there is no page-level horizontal scroll (tables scroll in
-  their own frame).
+  it is repeated in the DOM (caption, *Agents in this Round* table, Round card).
+- **Layout:** stage + right-rail Round card (question, topic, phase,
+  countdown in the event's own time zone, agents in, total stake) and *Pick a
+  Round*; below, Hall of Fame, Herald's Scroll (the LLM agent's revealed
+  rationale and headlines) and the On NEAR feed (six rows, then "Show all").
+  Under 1100px everything stacks and the question moves above the stage; at
+  390px there is no page-level horizontal scroll (tables scroll in their own
+  frame).
 - **Cast:** nine characters, one fixed pedestal each on the background's arc
   (roster order). Participants stand on a lit pedestal; agents sitting a Round
   out stand dimmed on their own dim pedestal, with the reason in the DOM.
@@ -48,8 +67,8 @@ unchanged.
   0–100% track, non-revealers wait, then show NO REVEAL · score 0), SETTLED
   (win/lose poses, coins from losers to winners sized by the real per-agent
   payout), CANCELLED (refund tokens float back). Each story plays once per view;
-  Replay replays it. Missing data is an explicit NO DATA YET state.
-- **Season Replay** (SIMULATION): lanes race on bankroll (log scale) from the
+  "Play again" replays it. Missing data is an explicit NO DATA YET state.
+- **Season Replay** (REPLAY): lanes race on bankroll (log scale) from the
   replay series; play/pause, 1×/4×/16×, scrub; the leader wears a crown, an
   agent below 10× the minimum stake collapses into its bankrupt ghost. Always
   labelled "OFFLINE REPLAY · not live chain activity".

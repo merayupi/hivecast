@@ -32,27 +32,37 @@ forecast is weighted by stake and the payouts keep score.
 
 ![The Hive Arena: a settled Round with all nine agents on their pedestals](packages/dashboard/test/screenshots/settled-yes-1440.png)
 
-1. **Open the dashboard** — it lands on **ARENA**, a 16-bit night market inside
-   the Hive. It auto-picks a Round in this order: a Reveal in progress → a
-   forecast on sale → the most recent settled Round. Every number, hash, and
-   Outcome on the stage comes from the runner API or the chain; missing data
-   shows **NO DATA YET**.
-2. **Click an envelope** under the Lockbox (or a hash in *On stage*): you get
-   that agent's on-chain **commitment hash**, the SHA-256 it committed before
-   anyone knew the Outcome.
-3. **Click an item in *On NEAR***: each finalized runner transaction (commit,
+Visitors do not bet. The agents bet; a visitor watches for free and can buy the
+agents' combined forecast before the event starts.
+
+1. **Open the dashboard** — on a first visit a five-step tour opens (**? How it
+   works** in the top bar reopens it). Close it and you are on **ARENA**, a
+   16-bit night market inside the Hive. It auto-picks a Round in this order: a
+   Reveal in progress → a forecast on sale → the most recent settled Round.
+   Every number, hash, and Outcome on the stage comes from the runner API or
+   the chain; missing data shows **NO DATA YET**.
+2. **Read the bar under the stage**: the five steps of a Round (Commit →
+   Forecast on sale → Event → Reveal → Payout) with the current one lit, a
+   **NOW** line and a **YOU CAN** line. The strip above the stage counts down
+   to the next forecast sale and shows a **Buy forecast** button while one is
+   on sale.
+3. **Click an envelope** under the Lockbox (or a hash in *Agents in this
+   Round*): you get that agent's on-chain **commitment hash**, the SHA-256 it
+   committed before anyone knew the Outcome.
+4. **Click a row in *On NEAR***: each finalized runner transaction (commit,
    reveal, settle …) links to the testnet explorer.
-4. **Open a settled Round** on the *Schedule board* and press **Replay**: the
+5. **Open a settled Round** in *Pick a Round* and press **Play again**: the
    Outcome icon drops, every revealed probability lands as a dart on the
    0–100% track, winners hop, losers slump, and coins fly from losers to
    winners sized by the real per-agent payout.
-5. **Hall of Fame**: the Brier ranking across all Rounds (lower is better),
+6. **Hall of Fame**: the Brier ranking across all Rounds (lower is better),
    rounds joined, and a skull for an agent that can no longer fund the
-   minimum stake.
-6. **SIMULATION → 16×**: the 60-day offline season as a race. Yolo collapses
-   into its ghost once its bankroll can no longer fund a stake.
-7. **LEDGER** for the exact numbers: the original ruled-ledger views with
-   yoctoNEAR amounts, the wallet buy/read/claim flow, and the trust disclosure.
+   minimum stake. **AGENTS** has one card per agent with its strategy.
+7. **REPLAY → 16× → Play**: the 60-day offline season as a race. Yolo
+   collapses into its ghost once its bankroll can no longer fund a stake.
+8. **ROUNDS** for the exact numbers: every Round on the contract with
+   yoctoNEAR amounts and the wallet buy/read/claim flow. **GUIDE** has the
+   glossary and the trust disclosure.
 
 | | |
 | --- | --- |
@@ -92,7 +102,7 @@ Mean Brier score, lower is better (0.25 = always answering 50%):
   0.517, `climatology` 0.374) pull the stake-weighted average up to 0.239.
   (IFS 9 km grid cell nearest −6.21, 106.85, Asia/Jakarta days.)
 
-The dashboard's **SIMULATION** tab replays the same report as a Season
+The dashboard's **REPLAY** tab replays the same report as a Season
 Replay race (bankroll on a log scale, 1×/4×/16×) above the accuracy chart and
 agent table. It is always labelled *offline replay*, never chain activity.
 
@@ -120,8 +130,12 @@ agent table. It is always labelled *offline replay*, never chain activity.
 
 1. Create a testnet wallet in [Meteor Wallet](https://wallet.meteorwallet.app)
    and get free testnet NEAR from [near-faucet.io](https://near-faucet.io).
-2. Open the live site (or run the runner + dashboard locally, below), press
-   **Connect wallet**, pick a Round marked **snapshot ready**, and buy access.
+2. Open the live site (or run the runner + dashboard locally, below) and press
+   **Connect wallet**. A forecast is on sale from the moment commitments close
+   until the event starts: the last 5 minutes before each event. The strip at
+   the top of **ARENA** counts down to the next sale; when it reads **ON SALE
+   NOW**, press **Buy forecast** (or open the Round marked **on sale** in
+   **ROUNDS**) and buy access.
 3. Sign the login message and read the frozen forecast. Re-reading is free.
 4. After the Round settles, compare every agent's revealed probability and
    Brier score in the Round detail, and read what the LLM agent saw and why it
@@ -139,7 +153,7 @@ authenticated Forecast Access delivery, an offline replay, and a dashboard.
 | `packages/core` | Pure strategy interface, eight strategies, exact `bigint` yoctoNEAR accounting, seeded RNG, exact decimal helpers. |
 | `packages/simulation` | Offline, deterministic two-domain historical replay + CLI. |
 | `packages/runner` | Durable runner: real NEAR RPC/signing, commitment pipeline, private SQLite persistence, source fetchers, the public HTTP service, and Forecast Access auth/delivery. |
-| `packages/dashboard` | Vite + React + Tailwind dashboard: the **Hive Arena** (canvas stage, Round card, Hall of Fame, Herald's Scroll, On NEAR feed), the **Season Replay**, and the original **ledger** (wallet connect, buy/read/claim/withdraw, leaderboard, comparison, trust disclosure). |
+| `packages/dashboard` | Vite + React + Tailwind dashboard: the **Hive Arena** (canvas stage, Round steps, Round card, Hall of Fame, Herald's Scroll, On NEAR feed), the first-visit tour, the agent cards, the **Season Replay**, the ruled-ledger **Rounds** view (wallet connect, buy/read/claim/withdraw, comparison), and the guide (glossary, trust disclosure). |
 | `art/` | Original pixel art (Aseprite sources, previews, and the generators that rebuild the sheets in `packages/dashboard/public/sprites`). |
 
 ## Commands
@@ -167,8 +181,10 @@ HIVECAST_API=http://127.0.0.1:8787 npm run dev
 - The dashboard is an honest read of finalized chain state: it never fabricates
   an Outcome, probability, score, or a chart row. Monetary amounts are yoctoNEAR
   decimal strings; timestamps are UTC nanoseconds; probability is bps.
-- Tabs: **ARENA** (default), **LEDGER** (the original views), **SIMULATION**
-  (Season Replay), **TRUST**. `?round=<id>` pins a Round in the Arena.
+- Tabs: **ARENA** (default), **ROUNDS** (`#ledger`: every Round, buy/read/claim),
+  **AGENTS** (`#agents`), **REPLAY** (`#simulation`: Season Replay), **GUIDE**
+  (`#trust`: how it works, glossary, trust boundary). `?round=<id>` pins a Round
+  in the Arena.
 - `npm run test --workspace @hivecast/dashboard` runs the scene/sprite tests;
   `npm run screenshots --workspace @hivecast/dashboard` (with the dev server
   running) re-renders every recorded scene state from the real API responses
