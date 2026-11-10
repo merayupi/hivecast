@@ -651,6 +651,14 @@ export class Runner {
 
   private async resolvePhase(q: LocalQuestion): Promise<StepResult[]> {
     const now = this.nowNs();
+    // There is no Outcome before the observed period is over, and the contract
+    // rejects a resolve before `resolve_time`. Do not ask the source earlier: a
+    // daily weather archive already answers for a day still in progress, and
+    // the resolve built from it would be rejected on chain on every tick,
+    // burning the resolver's gas until the observation ends.
+    if (now < q.resolveTimeNs) {
+      return [{ kind: 'resolve', questionId: q.questionId, accountId: null, sent: false, reason: 'observation-not-ended', error: null }];
+    }
     let resolution: ResolutionResult;
     try {
       resolution = await this.source.resolveOutcome(q);
