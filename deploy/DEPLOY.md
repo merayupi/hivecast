@@ -82,6 +82,14 @@ Caddy serves the new `dist` at once; no reload is needed.
 
 ## Things to keep an eye on
 
+- **RPC rate limits.** Public RPC endpoints limit requests per IP. When the
+  primary `rpcUrl` answers 429 or 5xx, or is unreachable, the runner and the
+  service move to the next entry of `rpcFallbackUrls` and stay there for five
+  minutes before trying the primary again. `journalctl -u hivecast-service -u
+  hivecast-runner | grep '\[rpc\]'` shows every switch (hosts only, never a
+  key). Without fallbacks a rate-limited primary means 503s on the site and
+  missed commits. An RPC provider API key in the URL is safe to use: logs and
+  public error bodies carry the host only.
 - **LLM credits.** The `llm-news` agent makes at most 3 NEAR AI Cloud calls per
   hourly price Round (usually 1). `journalctl -u hivecast-runner | grep llm-news`
   shows each forecast with its token count. Remove the `llm` block to switch it off.

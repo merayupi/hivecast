@@ -4,6 +4,10 @@
   "operatorId": "hivecast-1105-0548.testnet",
   "resolverId": "hivecast-1105-0548.testnet",
   "rpcUrl": "https://rpc.testnet.fastnear.com",
+  "rpcFallbackUrls": [
+    "https://near-testnet.drpc.org",
+    "https://test.rpc.fastnear.com"
+  ],
   "credentialDirectory": "/etc/hivecast/near-credentials/testnet",
   "databasePath": "/var/lib/hivecast/hivecast-runner.sqlite",
   "seed": 42,

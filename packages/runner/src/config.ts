@@ -23,6 +23,11 @@ export interface RunnerConfig {
   operatorId: string;
   resolverId: string;
   rpcUrl: string;
+  /**
+   * Further RPC endpoints, tried in order when `rpcUrl` is rate-limited or
+   * unreachable. Optional: with none, `rpcUrl` is the only endpoint.
+   */
+  rpcFallbackUrls?: readonly string[];
   credentialDirectory: string;
   databasePath: string;
   seed: number;
@@ -156,6 +161,21 @@ function parseCities(raw: unknown): WeatherCity[] {
 
 const REQUIRED_AGENTS = AGENT_IDS;
 
+/** Optional list of extra RPC endpoints: http(s) URLs, no duplicates, none equal to `rpcUrl`. */
+function parseRpcFallbackUrls(raw: unknown, primary: string): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new Error('config.rpcFallbackUrls must be an array of URLs');
+  const seen = new Set([primary]);
+  return raw.map((value, i) => {
+    if (typeof value !== 'string' || !/^https?:\/\/\S+$/.test(value)) {
+      throw new Error(`config.rpcFallbackUrls[${i}] must be an http(s) URL`);
+    }
+    if (seen.has(value)) throw new Error(`config.rpcFallbackUrls[${i}] repeats another RPC endpoint`);
+    seen.add(value);
+    return value;
+  });
+}
+
 function parsePositiveBigInt(value: unknown, field: string): bigint {
   if (typeof value !== 'string' || !/^\d+$/.test(value)) {
     throw new Error(`config.${field} must be a decimal string, got ${JSON.stringify(value)}`);
@@ -223,6 +243,7 @@ export function loadConfig(path: string): RunnerConfig {
     operatorId: requireString(c.operatorId, 'operatorId'),
     resolverId: requireString(c.resolverId, 'resolverId'),
     rpcUrl: requireString(c.rpcUrl, 'rpcUrl'),
+    rpcFallbackUrls: parseRpcFallbackUrls(c.rpcFallbackUrls, requireString(c.rpcUrl, 'rpcUrl')),
     credentialDirectory: requireString(c.credentialDirectory, 'credentialDirectory'),
     databasePath: requireString(c.databasePath, 'databasePath'),
     seed: typeof c.seed === 'number' ? c.seed : 42,
