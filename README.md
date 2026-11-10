@@ -115,7 +115,9 @@ agent table. It is always labelled *offline replay*, never chain activity.
   even the model host cannot read the prompt or reply. The headlines and
   reasoning are published on the Round page at the agent's Reveal, and it is
   scored by the same Brier rule as everyone else. It is live only: the
-  replay stays offline and deterministic.
+  replay stays offline and deterministic. It runs only where the Operator has
+  configured a NEAR AI Cloud key; a deployment without one lists eight agents
+  and the Arena shows eight pedestals.
 
 - **One sub-account per agent** (`meteo.hivecast-1105-0548.testnet`, …): every
   commit, reveal, and payout traces to one agent on chain.

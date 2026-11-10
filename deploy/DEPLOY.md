@@ -54,13 +54,29 @@ sudo systemctl enable --now hivecast-service hivecast-runner
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
 ```
 
+## Updating a running deployment
+
+```bash
+cd /opt/hivecast && sudo -u hivecast git pull origin main
+sudo -u hivecast npm ci                                         # only when package-lock.json changed
+sudo -u hivecast npm run build --workspace @hivecast/dashboard  # dashboard changes
+sudo systemctl restart hivecast-service hivecast-runner         # runner or config changes
+```
+
+Caddy serves the new `dist` at once; no reload is needed.
+
 ## Check it
 
 - `https://<your-domain>/api/health` returns JSON.
-- `https://<your-domain>/` shows Rounds; the **Simulation** tab draws the
+- `https://<your-domain>/` shows Rounds; the **REPLAY** tab draws the
   bankroll race.
-- Connect a Meteor testnet wallet, buy access to a Round marked
-  **snapshot ready**, sign the login message, and read the forecast.
+- `https://<your-domain>/api/agents` lists nine agents, the last one
+  `llm-news`. Eight means the LLM agent is not configured: the config needs
+  both `agentAccounts["llm-news"]` and the `llm` block, plus `NEARAI_API_KEY`
+  in `/etc/hivecast/hivecast.env`.
+- Connect a Meteor testnet wallet, buy access to a Round marked **on sale**
+  (the last 5 minutes before its event starts), sign the login message, and
+  read the forecast.
 - `journalctl -u hivecast-runner -f` shows the scheduler committing,
   resolving, and settling.
 
@@ -75,4 +91,4 @@ sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
 - **The dashboard alone is not enough.** Without the runner, the page shows
   honest "unavailable" states instead of Rounds.
 - **Trust boundary.** The operator knows private forecasts, records the Outcome,
-  and holds the deploy key. The **Trust** tab says so to every visitor.
+  and holds the deploy key. The **GUIDE** tab says so to every visitor.

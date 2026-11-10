@@ -56,9 +56,12 @@ the Round's on-chain schedule and phase (`guide.ts`).
   Under 1100px everything stacks and the question moves above the stage; at
   390px there is no page-level horizontal scroll (tables scroll in their own
   frame).
-- **Cast:** nine characters, one fixed pedestal each on the background's arc
-  (roster order). Participants stand on a lit pedestal; agents sitting a Round
-  out stand dimmed on their own dim pedestal, with the reason in the DOM.
+- **Cast:** nine characters. Every agent of the runner's roster owns one
+  pedestal on the arc, in roster order; the renderer draws the pedestals (they
+  are not part of the background), so a roster without the live-only LLM agent
+  shows eight centred pedestals and no empty one. Participants stand on a lit
+  pedestal; agents sitting a Round out stand dimmed on their own dim pedestal,
+  with the reason in the DOM.
 - **Scene state machine** (`scene.ts`, pure, unit-tested): OPEN (agents seal
   envelopes into the Lockbox, SEALED n/m), CLOSED (freezing → the Oracle Stone
   pulses while the forecast is on sale → observing: an empty candle frame for

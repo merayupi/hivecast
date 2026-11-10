@@ -62,17 +62,19 @@ export interface SceneLayout {
   actors: { x: number; y: number }[];
   /** Feet anchor per benched agent (same order as scene.bench). */
   bench: { x: number; y: number }[];
-  /** Slot index per participant (label stagger); -1 in the packed fallback. */
+  /** Position on the arc per participant, left to right (label stagger); -1 in the packed fallback. */
   actorSlots: number[];
-  /** Pedestals to draw: one per slot in the fixed layout (lit = participant). */
+  /** Pedestals to draw: one per roster agent in the fixed layout (lit = participant). */
   pedestals: { x: number; y: number; lit: boolean }[];
   fixed: boolean;
 }
 
 /**
- * Where everyone stands. Normally every roster agent owns one of the nine
- * pedestals of the background's arc (slot = roster order): participants on
- * a lit pedestal, agents sitting this Round out dimmed on their own dim one.
+ * Where everyone stands. Normally every roster agent owns one pedestal on the
+ * arc, in roster order: participants on a lit pedestal, agents sitting this
+ * Round out dimmed on their own dim one. The arc holds exactly the agents of
+ * this roster, so a roster without the live-only LLM agent has eight centred
+ * pedestals and no empty ninth. An empty stage keeps all nine, dim.
  * If an agent is unknown (no slot) the packed centre arc + side bench is used.
  */
 export function layoutScene(scene: Pick<Scene, 'actors' | 'bench'>): SceneLayout {
@@ -80,14 +82,17 @@ export function layoutScene(scene: Pick<Scene, 'actors' | 'bench'>): SceneLayout
   const all = [...scene.actors.map((a) => slotOf(a.agentId)), ...scene.bench.map((b) => slotOf(b.agentId))];
   const fixed = all.every((s) => s >= 0 && s < SLOTS) && new Set(all).size === all.length;
   if (fixed) {
-    const actorSlots = scene.actors.map((a) => slotOf(a.agentId));
+    const present = [...all].sort((a, b) => a - b);
+    const count = present.length === 0 ? SLOTS : present.length;
+    const placeOf = (id: string) => present.indexOf(slotOf(id));
+    const actorSlots = scene.actors.map((a) => placeOf(a.agentId));
     const lit = new Set(actorSlots);
     return {
       fixed,
       actorSlots,
-      actors: actorSlots.map((s) => actorAnchor(s, SLOTS)),
-      bench: scene.bench.map((b) => actorAnchor(slotOf(b.agentId), SLOTS)),
-      pedestals: Array.from({ length: SLOTS }, (_, s) => ({ ...actorAnchor(s, SLOTS), lit: lit.has(s) })),
+      actors: actorSlots.map((p) => actorAnchor(p, count)),
+      bench: scene.bench.map((b) => actorAnchor(placeOf(b.agentId), count)),
+      pedestals: Array.from({ length: count }, (_, p) => ({ ...actorAnchor(p, count), lit: lit.has(p) })),
     };
   }
   const n = scene.actors.length;
@@ -446,6 +451,8 @@ export function drawScene(g: CanvasRenderingContext2D, bank: SpriteBank, scene: 
   drawBanner(g, bank, scene);
 
   if (scene.kind === 'no-data') {
+    // An empty stage still shows its (dim) pedestals.
+    layoutScene({ actors: [], bench: [] }).pedestals.forEach((p) => drawPedestal(g, bank, p.x, p.y, false));
     text(g, bank, 'NO DATA YET', 160, 96, HIVE.ash);
     return;
   }
