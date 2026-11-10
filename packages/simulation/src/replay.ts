@@ -150,7 +150,9 @@ export interface ReplayReport {
 
 const HOUR_MS = 3600 * 1000;
 const MIN_MS = 60 * 1000;
-const PRICE_CUTOFF_LEAD_MS = 5 * MIN_MS;
+// Same lead as the live price schedule (RULES.md §2). Any lead under one hour
+// selects the same completed 1h candles, so the replay is unchanged by it.
+const PRICE_CUTOFF_LEAD_MS = 30 * MIN_MS;
 
 function priceRounds(bundle: Bundle): RoundSpec[] {
   const { candles, evalStart, evalEnd } = bundle.price;

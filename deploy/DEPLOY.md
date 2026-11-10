@@ -75,7 +75,7 @@ Caddy serves the new `dist` at once; no reload is needed.
   both `agentAccounts["llm-news"]` and the `llm` block, plus `NEARAI_API_KEY`
   in `/etc/hivecast/hivecast.env`.
 - Connect a Meteor testnet wallet, buy access to a Round marked **on sale**
-  (the last 5 minutes before its event starts), sign the login message, and
+  (price Rounds: the 30 minutes before every UTC hour), sign the login message, and
   read the forecast.
 - `journalctl -u hivecast-runner -f` shows the scheduler committing,
   resolving, and settling.

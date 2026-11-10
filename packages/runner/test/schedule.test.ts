@@ -12,6 +12,7 @@ import { writeFileSync, rmSync } from 'node:fs';
 
 import {
   DEFAULT_WEATHER_CITIES,
+  computePriceSchedule,
   computeWeatherSchedule,
   localDateOfUtcMs,
   nextDate,
@@ -41,6 +42,21 @@ test('localDateOfUtcMs maps an instant to the right local calendar date', () => 
   assert.equal(localDateOfUtcMs(t, 'Asia/Jakarta'), '2026-11-10');
   assert.equal(localDateOfUtcMs(t, 'Europe/London'), '2026-11-09');
   assert.equal(nextDate('2026-12-31'), '2027-01-01');
+});
+
+test('price schedule: commitments open 45 min and close 30 min before the hour; the sale runs until the hour', () => {
+  const hour = Date.parse('2026-11-10T14:00:00Z');
+  const s = computePriceSchedule(hour);
+  const iso = (ns: bigint) => new Date(nsToMs(ns)).toISOString();
+  assert.equal(iso(s.openTimeNs), '2026-11-10T13:15:00.000Z');
+  assert.equal(iso(s.closeTimeNs), '2026-11-10T13:30:00.000Z');
+  assert.equal(iso(s.observationStartNs), '2026-11-10T14:00:00.000Z');
+  assert.equal(iso(s.observationEndNs), '2026-11-10T15:00:00.000Z');
+  assert.equal(iso(s.resolveDeadlineNs), '2026-11-10T15:15:00.000Z');
+  // The forecast is on sale from close to observation start: 30 minutes.
+  assert.equal(nsToMs(s.observationStartNs) - nsToMs(s.closeTimeNs), 30 * 60_000);
+  // The daemon creates this Question at the top of the previous hour, before commitments open.
+  assert.ok(nsToMs(s.openTimeNs) > hour - 3_600_000);
 });
 
 test('weather schedule: commitments open 18:00 and close 23:55 local the evening before', () => {
